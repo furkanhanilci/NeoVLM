@@ -64,6 +64,7 @@ thesis/*.toc
 *.zip
 *.7z
 *.egg
+*.egg-info/
 
 # AI coordination scratch files — process/decision notebook, excluded from VCS
 AI_COORDINATION.md
