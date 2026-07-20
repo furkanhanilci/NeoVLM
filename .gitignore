@@ -70,6 +70,7 @@ thesis/*.toc
 AI_COORDINATION.md
 AI_TASKS.md
 AI_REVIEW.md
+AI_SESSION_HANDOFF.md
 
 # Keep source/config/docs visible even with broad generated-output ignores
 !.gitignore
