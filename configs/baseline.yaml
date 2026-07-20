@@ -2,15 +2,15 @@ seed: 0
 stage: il
 
 vlm:
-  model_id: Qwen/Qwen3-VL-8B-Instruct
+  model_id: Qwen/Qwen3-VL-2B-Instruct
   freeze: true
-  hidden_size: 4096
+  hidden_size: 2048
   token_dim: 512
   max_image_tokens: 256
 
 resampler:
   num_queries: 32
-  input_dim: 4096
+  input_dim: 2048
   output_dim: 512
   num_heads: 8
   dropout: 0.1

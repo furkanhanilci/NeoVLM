@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 
 @dataclass(frozen=True)
 class VLMConfig:
-    model_id: str = "Qwen/Qwen3-VL-8B-Instruct"
+    model_id: str = "Qwen/Qwen3-VL-2B-Instruct"
     freeze: bool = True
-    hidden_size: int = 4096
+    hidden_size: int = 2048
     token_dim: int = 512
     max_image_tokens: int = 256
 
@@ -18,7 +18,7 @@ class VLMConfig:
 @dataclass(frozen=True)
 class ResamplerConfig:
     num_queries: int = 32
-    input_dim: int = 4096
+    input_dim: int = 2048
     output_dim: int = 512
     num_heads: int = 8
     dropout: float = 0.1
@@ -61,3 +61,11 @@ class ExperimentConfig:
     rationale: RationaleConfig = field(default_factory=RationaleConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
+
+    def __post_init__(self) -> None:
+        if self.resampler.input_dim != self.vlm.hidden_size:
+            object.__setattr__(
+                self,
+                "resampler",
+                replace(self.resampler, input_dim=self.vlm.hidden_size),
+            )
