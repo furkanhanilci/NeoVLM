@@ -14,6 +14,7 @@ import carla
 
 from vlm_driving.carla.actions import control_to_carla, normalized_to_control
 from vlm_driving.carla.logger import DatasetManifest, JsonlRolloutLogger
+from vlm_driving.carla.metrics import write_rollout_metrics
 from vlm_driving.carla.observations import (
     ControlMode,
     ControlState,
@@ -48,6 +49,11 @@ class RolloutConfig:
     control_mode: ControlMode = "rule_based"
     overwrite: bool = True
     traffic_manager_port: int = 8000
+    bc_checkpoint_path: Path = Path("results/bc_smoke/bc_checkpoint.pt")
+    bc_hidden_source: str = "live"
+    bc_feature_cache_dir: Path | None = None
+    bc_command_text: str = "You are driving in CARLA. Keep lane and continue safely."
+    bc_device: str | None = None
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -125,6 +131,38 @@ def _make_camera_frame(
     )
 
 
+def _carla_image_to_pil(image: carla.Image):
+    from PIL import Image
+
+    return Image.frombytes(
+        "RGBA",
+        (image.width, image.height),
+        bytes(image.raw_data),
+        "raw",
+        "BGRA",
+    ).convert("RGB")
+
+
+def _make_bc_agent(config: RolloutConfig):
+    if not config.bc_checkpoint_path.exists():
+        raise FileNotFoundError(f"missing BC checkpoint: {config.bc_checkpoint_path}; run make bc-smoke first")
+    try:
+        from vlm_driving.carla.bc_agent import BCAgent
+    except ImportError as exc:
+        raise RuntimeError(
+            "bc_policy rollout requires torch/VLM dependencies in the same Python process as CARLA. "
+            "Current local setup has CARLA in the 'carla' env and torch/VLM in the 'vlm' env; "
+            "run CARLA-less agent tests or create a unified eval env before live rollout."
+        ) from exc
+    return BCAgent(
+        checkpoint_path=config.bc_checkpoint_path,
+        hidden_source=config.bc_hidden_source,
+        feature_cache_dir=config.bc_feature_cache_dir,
+        command_text=config.bc_command_text,
+        device=config.bc_device,
+    )
+
+
 def _collision_event(collision_events: list[carla.CollisionEvent]) -> EventState:
     if not collision_events:
         return EventState()
@@ -164,6 +202,8 @@ def run_rollout(config: RolloutConfig) -> Path:
     collision_events: list[carla.CollisionEvent] = []
     saved_frames = 0
     completed_steps = 0
+    written_records: list[dict] = []
+    bc_agent = None
 
     try:
         settings = world.get_settings()
@@ -197,13 +237,19 @@ def run_rollout(config: RolloutConfig) -> Path:
         if config.control_mode == "autopilot":
             vehicle.set_autopilot(True, traffic_manager.get_port())
             traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
+        elif config.control_mode == "bc_policy":
+            bc_agent = _make_bc_agent(config)
 
         route = RouteState(
             command=config.route_command,
             target_speed_mps=config.target_speed_mps,
         )
+        policy_name = {
+            "autopilot": "carla_autopilot",
+            "bc_policy": "bc_il",
+        }.get(config.control_mode, "rule_based_smoke")
         policy = PolicyState(
-            name="carla_autopilot" if config.control_mode == "autopilot" else "rule_based_smoke",
+            name=policy_name,
             control_mode=config.control_mode,
             is_expert=config.control_mode == "autopilot",
         )
@@ -219,13 +265,6 @@ def run_rollout(config: RolloutConfig) -> Path:
                 frame_id = world.tick()
                 snapshot = world.get_snapshot()
 
-                if config.control_mode == "autopilot":
-                    control = _carla_control_to_state(vehicle.get_control())
-                    action = _control_to_action(control)
-                    expert_control = control
-                else:
-                    expert_control = None
-
                 image = None
                 image_path = None
                 try:
@@ -238,6 +277,35 @@ def run_rollout(config: RolloutConfig) -> Path:
                     image = None
                     image_path = None
 
+                ego_state = _ego_state(vehicle, frame_id, snapshot.timestamp.elapsed_seconds)
+                camera_frame = _make_camera_frame(
+                    image=image,
+                    image_path=image_path,
+                    output_dir=output_dir,
+                    width=config.image_width,
+                    height=config.image_height,
+                )
+
+                if config.control_mode == "autopilot":
+                    control = _carla_control_to_state(vehicle.get_control())
+                    action = _control_to_action(control)
+                    expert_control = control
+                elif config.control_mode == "bc_policy":
+                    if bc_agent is None:
+                        raise RuntimeError("bc_policy selected but BC agent was not initialized")
+                    agent_record = {
+                        "ego": ego_state.to_dict(),
+                        "route": route.to_dict(),
+                        "camera": camera_frame.to_dict(),
+                    }
+                    live_image = _carla_image_to_pil(image) if image is not None else None
+                    action = bc_agent.act(agent_record, image=live_image)
+                    control = normalized_to_control(action)
+                    vehicle.apply_control(control_to_carla(control))
+                    expert_control = None
+                else:
+                    expert_control = None
+
                 events = _collision_event(collision_events)
                 is_last_step = step == config.frames - 1
                 termination = TerminationState(
@@ -248,23 +316,19 @@ def run_rollout(config: RolloutConfig) -> Path:
                     episode_id=config.episode_id,
                     step=step,
                     carla_frame=frame_id,
-                    ego=_ego_state(vehicle, frame_id, snapshot.timestamp.elapsed_seconds),
+                    ego=ego_state,
                     route=route,
                     action=action,
                     control=control,
-                    camera=_make_camera_frame(
-                        image=image,
-                        image_path=image_path,
-                        output_dir=output_dir,
-                        width=config.image_width,
-                        height=config.image_height,
-                    ),
+                    camera=camera_frame,
                     termination=termination,
                     policy=policy,
                     events=events,
                     expert_control=expert_control,
                 )
-                logger.write(record.to_dict())
+                record_dict = record.to_dict()
+                logger.write(record_dict)
+                written_records.append(record_dict)
                 completed_steps += 1
                 if termination.done:
                     break
@@ -287,6 +351,7 @@ def run_rollout(config: RolloutConfig) -> Path:
                     target_speed_mps=config.target_speed_mps,
                 )
             )
+            write_rollout_metrics(output_dir / "metrics.json", written_records)
 
         return output_dir
     finally:

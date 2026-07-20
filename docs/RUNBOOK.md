@@ -43,8 +43,23 @@ Use `make carla-window` instead of `make carla-start` when a visible CARLA windo
 | `make carla-status` | `scripts/carla_status.sh` | host shell + CARLA client check | Checks whether CARLA is active/reachable. |
 | `make carla-rollout-smoke` | `scripts/run_carla_rollout_smoke.sh` | `micromamba run -n carla` | Runs an 80-step rule-based rollout into `results/smoke_rollout/`. |
 | `make carla-dataset-smoke` | `scripts/run_carla_dataset_smoke.sh` | `micromamba run -n carla` | Runs the IL dataset smoke path. |
+| `make bc-smoke` | `scripts/run_bc_smoke.sh` | `micromamba run -n vlm` | Trains the tiny BC policy on the cached feature smoke set and writes `results/bc_smoke/bc_checkpoint.pt`. |
+| `make bc-rollout-smoke` | `scripts/run_bc_rollout_smoke.sh` | unified CARLA + torch/VLM env required | Attempts learned-policy closed-loop rollout into `results/bc_rollout_smoke/`. Currently blocked in the split local env. |
 | `make validate-carla-dataset` | `scripts/validate_carla_dataset.py` | script shebang/current Python | Validates `results/datasets/carla_il_smoke/episode_000`. |
 | `make smoke` | `scripts/run_smoke_tests.sh` | mixed | Runs broad host/env checks, but some CARLA/Bench2Drive failures are intentionally masked with `|| true`. Use targeted checks for gating. |
+
+## BC Policy Smoke
+
+The offline IL warm-start smoke path is:
+
+```bash
+make feature-cache-smoke
+make bc-smoke
+```
+
+This trains `resampler + FastPolicy` from cached frozen-VLM hidden states and writes a checkpoint under `results/bc_smoke/`, which is ignored by git.
+
+Closed-loop learned-policy rollout is wired through `make bc-rollout-smoke`, but the current local environments are split: the `vlm` environment has torch/VLM and cannot import CARLA 0.9.15 PythonAPI, while the `carla` environment imports CARLA but does not have torch. Until a unified eval environment exists, use the CARLA-free `tests/test_bc_agent.py` coverage and `make bc-smoke` as the gated checks.
 
 ## Rollout Output
 

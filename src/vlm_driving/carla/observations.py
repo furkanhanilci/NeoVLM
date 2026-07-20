@@ -24,7 +24,7 @@ TerminationReason = Literal[
     "manual_stop",
 ]
 
-ControlMode = Literal["rule_based", "autopilot"]
+ControlMode = Literal["rule_based", "autopilot", "bc_policy"]
 
 
 @dataclass(frozen=True)

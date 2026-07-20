@@ -195,7 +195,7 @@ def save_bc_checkpoint(
 
 def load_bc_checkpoint(path: str | Path, map_location: str | torch.device = "cpu") -> BCCheckpoint:
     checkpoint_path = Path(path)
-    data = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
+    data = torch.load(checkpoint_path, map_location=map_location, weights_only=True)
     if data.get("schema_version") != "bc_checkpoint_v1":
         raise ValueError(f"unsupported BC checkpoint schema: {data.get('schema_version')}")
     config = experiment_config_from_dict(data["config"])
