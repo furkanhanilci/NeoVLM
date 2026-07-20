@@ -54,6 +54,9 @@ class RolloutConfig:
     bc_feature_cache_dir: Path | None = None
     bc_command_text: str = "You are driving in CARLA. Keep lane and continue safely."
     bc_device: str | None = None
+    policy_server_host: str = "127.0.0.1"
+    policy_server_port: int = 8765
+    policy_server_timeout_s: float = 60.0
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -204,6 +207,7 @@ def run_rollout(config: RolloutConfig) -> Path:
     completed_steps = 0
     written_records: list[dict] = []
     bc_agent = None
+    remote_policy = None
 
     try:
         settings = world.get_settings()
@@ -239,6 +243,15 @@ def run_rollout(config: RolloutConfig) -> Path:
             traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
         elif config.control_mode == "bc_policy":
             bc_agent = _make_bc_agent(config)
+        elif config.control_mode == "bc_remote":
+            from vlm_driving.eval.policy_client import RemoteBCPolicy
+
+            remote_policy = RemoteBCPolicy(
+                host=config.policy_server_host,
+                port=config.policy_server_port,
+                timeout_s=config.policy_server_timeout_s,
+            ).connect()
+            remote_policy.reset()
 
         route = RouteState(
             command=config.route_command,
@@ -247,6 +260,7 @@ def run_rollout(config: RolloutConfig) -> Path:
         policy_name = {
             "autopilot": "carla_autopilot",
             "bc_policy": "bc_il",
+            "bc_remote": "bc_remote_il",
         }.get(config.control_mode, "rule_based_smoke")
         policy = PolicyState(
             name=policy_name,
@@ -269,7 +283,8 @@ def run_rollout(config: RolloutConfig) -> Path:
                 image_path = None
                 try:
                     image = image_queue.get(timeout=2.0)
-                    if step % config.save_every_n_frames == 0:
+                    should_save_frame = step % config.save_every_n_frames == 0 or config.control_mode == "bc_remote"
+                    if should_save_frame:
                         image_path = logger.frames_dir / f"frame_{step:05d}.png"
                         image.save_to_disk(str(image_path))
                         saved_frames += 1
@@ -300,6 +315,20 @@ def run_rollout(config: RolloutConfig) -> Path:
                     }
                     live_image = _carla_image_to_pil(image) if image is not None else None
                     action = bc_agent.act(agent_record, image=live_image)
+                    control = normalized_to_control(action)
+                    vehicle.apply_control(control_to_carla(control))
+                    expert_control = None
+                elif config.control_mode == "bc_remote":
+                    if remote_policy is None:
+                        raise RuntimeError("bc_remote selected but remote policy client was not initialized")
+                    if camera_frame.path is None:
+                        raise RuntimeError("bc_remote requires a saved camera frame path for every step")
+                    agent_record = {
+                        "ego": ego_state.to_dict(),
+                        "route": route.to_dict(),
+                        "camera": camera_frame.to_dict(),
+                    }
+                    action = remote_policy.act(agent_record, output_dir / camera_frame.path)
                     control = normalized_to_control(action)
                     vehicle.apply_control(control_to_carla(control))
                     expert_control = None
@@ -357,6 +386,8 @@ def run_rollout(config: RolloutConfig) -> Path:
     finally:
         if vehicle is not None and config.control_mode == "autopilot":
             vehicle.set_autopilot(False, traffic_manager.get_port())
+        if remote_policy is not None:
+            remote_policy.close()
         if camera is not None:
             camera.stop()
         if collision_sensor is not None:

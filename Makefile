@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: check-gpu check-torch check-carla check-bench2drive check-docker-gpu check-research test token-smoke vlm-smoke feature-cache-smoke bc-smoke bc-rollout-smoke smoke carla-server carla-start carla-window carla-status carla-rollout-smoke carla-dataset-smoke validate-carla-dataset thesis-pdf
+.PHONY: check-gpu check-torch check-carla check-bench2drive check-docker-gpu check-research test token-smoke vlm-smoke feature-cache-smoke bc-smoke bc-rollout-smoke bc-bridge-smoke smoke carla-server carla-start carla-window carla-status carla-rollout-smoke carla-dataset-smoke validate-carla-dataset thesis-pdf
 
 check-gpu:
 	./scripts/check_gpu.sh
@@ -37,6 +37,9 @@ bc-smoke:
 
 bc-rollout-smoke:
 	./scripts/run_bc_rollout_smoke.sh
+
+bc-bridge-smoke:
+	./scripts/run_bc_bridge_smoke.sh
 
 smoke:
 	./scripts/run_smoke_tests.sh

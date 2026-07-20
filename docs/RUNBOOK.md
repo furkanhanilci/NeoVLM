@@ -45,6 +45,7 @@ Use `make carla-window` instead of `make carla-start` when a visible CARLA windo
 | `make carla-dataset-smoke` | `scripts/run_carla_dataset_smoke.sh` | `micromamba run -n carla` | Runs the IL dataset smoke path. |
 | `make bc-smoke` | `scripts/run_bc_smoke.sh` | `micromamba run -n vlm` | Trains the tiny BC policy on the cached feature smoke set and writes `results/bc_smoke/bc_checkpoint.pt`. |
 | `make bc-rollout-smoke` | `scripts/run_bc_rollout_smoke.sh` | unified CARLA + torch/VLM env required | Attempts learned-policy closed-loop rollout into `results/bc_rollout_smoke/`. Currently blocked in the split local env. |
+| `make bc-bridge-smoke` | `scripts/run_bc_bridge_smoke.sh` | `vlm` policy server + `carla` rollout client | Runs the two-process learned-policy bridge into `results/bc_bridge_smoke/`; requires a running CARLA server. |
 | `make validate-carla-dataset` | `scripts/validate_carla_dataset.py` | script shebang/current Python | Validates `results/datasets/carla_il_smoke/episode_000`. |
 | `make smoke` | `scripts/run_smoke_tests.sh` | mixed | Runs broad host/env checks, but some CARLA/Bench2Drive failures are intentionally masked with `|| true`. Use targeted checks for gating. |
 
@@ -60,6 +61,28 @@ make bc-smoke
 This trains `resampler + FastPolicy` from cached frozen-VLM hidden states and writes a checkpoint under `results/bc_smoke/`, which is ignored by git.
 
 Closed-loop learned-policy rollout is wired through `make bc-rollout-smoke`, but the current local environments are split: the `vlm` environment has torch/VLM and cannot import CARLA 0.9.15 PythonAPI, while the `carla` environment imports CARLA but does not have torch. Until a unified eval environment exists, use the CARLA-free `tests/test_bc_agent.py` coverage and `make bc-smoke` as the gated checks.
+
+## BC Bridge Smoke
+
+The live learned-policy rollout uses a two-process bridge so CARLA stays in the `carla` environment and torch/Qwen stay in the `vlm` environment:
+
+```bash
+make carla-start
+make carla-status
+make bc-bridge-smoke
+```
+
+`scripts/run_bc_bridge_smoke.sh` starts `scripts/run_policy_server.sh` in the background, waits for the socket `ready` handshake, then runs `control_mode="bc_remote"` in the `carla` environment. The client writes each RGB frame to disk and sends the frame path plus rollout record state over localhost TCP; the VLM-side server returns a normalized steering/acceleration action.
+
+Useful overrides:
+
+```bash
+BC_BRIDGE_FRAMES=20 make bc-bridge-smoke
+BC_BRIDGE_IMAGE_WIDTH=320 BC_BRIDGE_IMAGE_HEIGHT=180 make bc-bridge-smoke
+POLICY_SERVER_PORT=8877 BC_CHECKPOINT=results/bc_smoke/bc_checkpoint.pt make bc-bridge-smoke
+```
+
+Outputs are written to `results/bc_bridge_smoke/`, with policy-server logs in `setup_logs/policy_server.log` and client smoke logs in `setup_logs/bc_bridge_smoke.log`. On 8 GB GPUs, offscreen CARLA and Qwen may not fit at the same time; use `POLICY_SERVER_DEVICE=cpu` for a slower integration-only check or install a supported 4-bit stack before expecting GPU live rollout.
 
 ## Rollout Output
 
