@@ -92,6 +92,7 @@ AI_REVIEW.md
 !thesis/chapters/
 !thesis/chapters/**
 
-# Whitelist'lenmiş kaynak ağaçlarında bile cache/bytecode'u tekrar hariç tut
+# Whitelist'lenmiş kaynak ağaçlarında bile cache/bytecode/build metadata'yı hariç tut
 **/__pycache__/
 *.py[cod]
+*.egg-info/
