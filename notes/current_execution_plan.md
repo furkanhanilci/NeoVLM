@@ -130,9 +130,17 @@ the dependency order below, not appended as afterthoughts.
 - Cross-cutting; needed before any thesis result table is produced.
 
 ### Revised High-Level Order
-M1-M3 (done) -> M4 (VLM provider, smaller VLM) -> M-mem -> M5 (IL) ->
-M-data (in parallel, gated) -> M6 (residual PPO) -> M-rep -> M-eval/M7 ->
-M-exp (spans M5 onward). Staleness augmentation (gap G8) lands with M5/M6 training.
+M1-M3 (done) -> M4 (done: T-008..T-011, 2B provider + offline cache) ->
+**M5 (IL loop first)** -> M-mem (temporal memory as an ablation on the working
+IL baseline) -> M-data (scale expert data + rationale labels) -> M6 (residual
+PPO) -> M-rep -> M-eval/M7 -> M-exp (spans M5 onward). Staleness augmentation
+(gap G8) lands with M5/M6 training.
+
+Reorder note (2026-07-20): M5 moved before M-mem. A memory module cannot be
+validated without a training loop, so build the feedforward IL baseline first,
+then add {GRU/LSTM/temporal transformer} as ablations on top. First IL run is a
+loop-smoke on the small M3 dataset + T-011 cache (proves the loop, not driving
+quality); a real IL result needs M-data.
 
 ## Scope Guard
 
