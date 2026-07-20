@@ -43,8 +43,9 @@ Use `make carla-window` instead of `make carla-start` when a visible CARLA windo
 | `make carla-status` | `scripts/carla_status.sh` | host shell + CARLA client check | Checks whether CARLA is active/reachable. |
 | `make carla-rollout-smoke` | `scripts/run_carla_rollout_smoke.sh` | `micromamba run -n carla` | Runs an 80-step rule-based rollout into `results/smoke_rollout/`. |
 | `make carla-dataset-smoke` | `scripts/run_carla_dataset_smoke.sh` | `micromamba run -n carla` | Runs the IL dataset smoke path. |
+| `make carla-dataset-collect` | `scripts/run_carla_dataset_collect.sh` | `carla` collection + `vlm` split manifest | Collects multiple autopilot episodes and writes `split_manifest.json`; actual CARLA run is T-017. |
 | `make bc-smoke` | `scripts/run_bc_smoke.sh` | `micromamba run -n vlm` | Trains the tiny BC policy on the cached feature smoke set and writes `results/bc_smoke/bc_checkpoint.pt`. |
-| `make bc-rollout-smoke` | `scripts/run_bc_rollout_smoke.sh` | unified CARLA + torch/VLM env required | Attempts learned-policy closed-loop rollout into `results/bc_rollout_smoke/`. Currently blocked in the split local env. |
+| `make bc-rollout-smoke` | `scripts/run_bc_rollout_smoke.sh` | deprecated in this split env | In-process learned-policy rollout path; use `make bc-bridge-smoke` instead because CARLA and torch/VLM run in separate envs. |
 | `make bc-bridge-smoke` | `scripts/run_bc_bridge_smoke.sh` | `vlm` policy server + `carla` rollout client | Runs the two-process learned-policy bridge into `results/bc_bridge_smoke/`; requires a running CARLA server. |
 | `make validate-carla-dataset` | `scripts/validate_carla_dataset.py` | script shebang/current Python | Validates `results/datasets/carla_il_smoke/episode_000`. |
 | `make smoke` | `scripts/run_smoke_tests.sh` | mixed | Runs broad host/env checks, but some CARLA/Bench2Drive failures are intentionally masked with `|| true`. Use targeted checks for gating. |
@@ -60,7 +61,7 @@ make bc-smoke
 
 This trains `resampler + FastPolicy` from cached frozen-VLM hidden states and writes a checkpoint under `results/bc_smoke/`, which is ignored by git.
 
-Closed-loop learned-policy rollout is wired through `make bc-rollout-smoke`, but the current local environments are split: the `vlm` environment has torch/VLM and cannot import CARLA 0.9.15 PythonAPI, while the `carla` environment imports CARLA but does not have torch. Until a unified eval environment exists, use the CARLA-free `tests/test_bc_agent.py` coverage and `make bc-smoke` as the gated checks.
+`make bc-rollout-smoke` is deprecated for this local split environment: the `vlm` environment has torch/VLM but cannot import CARLA 0.9.15 PythonAPI, while the `carla` environment imports CARLA but does not have torch. Use `make bc-bridge-smoke` for learned-policy closed-loop checks.
 
 ## BC Bridge Smoke
 
@@ -83,6 +84,32 @@ POLICY_SERVER_PORT=8877 BC_CHECKPOINT=results/bc_smoke/bc_checkpoint.pt make bc-
 ```
 
 Outputs are written to `results/bc_bridge_smoke/`, with policy-server logs in `setup_logs/policy_server.log` and client smoke logs in `setup_logs/bc_bridge_smoke.log`. On 8 GB GPUs, offscreen CARLA and Qwen may not fit at the same time; use `POLICY_SERVER_DEVICE=cpu` for a slower integration-only check or install a supported 4-bit stack before expecting GPU live rollout.
+
+## Dataset Collection
+
+T-016 prepares the multi-episode collection path; T-017 is the actual CARLA run. Start from a modest first real dataset rather than the 100k-frame research target:
+
+- Initial target: `CARLA_NUM_EPISODES=50`, `CARLA_FRAMES_PER_EPISODE=200`, `CARLA_SAVE_EVERY_N_FRAMES=5`. This yields about 2,000 saved RGB frames.
+- Feature-cache budget: T-011 measured about 1.457 MiB per saved frame, so 2,000 frames is about 2.85 GiB. Keep the first pass under 5,000 saved frames, about 7.1 GiB cache.
+- Split policy: split by episode, not by frame, with the default 85/15 train/val split and `CARLA_SPLIT_SEED=17`.
+- Diversity knobs: `CARLA_BASE_SEED` changes spawn/traffic-manager seed; `CARLA_ROUTE_COMMANDS` and `CARLA_WEATHER_PRESETS` cycle per episode. `CARLA_TOWNS` can be set to comma-separated CARLA map names when changing town is needed.
+
+Dry validation before a CARLA run:
+
+```bash
+bash -n scripts/run_carla_dataset_collect.sh
+micromamba run -n vlm python -c "from vlm_driving.data import discover_episodes, split_episodes; print('ok')"
+```
+
+Actual collection, with CARLA already running:
+
+```bash
+make carla-start
+make carla-status
+CARLA_NUM_EPISODES=50 CARLA_FRAMES_PER_EPISODE=200 CARLA_SAVE_EVERY_N_FRAMES=5 make carla-dataset-collect
+```
+
+The script writes episodes under `results/datasets/carla_il_collect/episode_XXXX/` and an episode-level `split_manifest.json` at the dataset root.
 
 ## Rollout Output
 
@@ -118,6 +145,7 @@ The manifest uses `schema_version: carla_rollout_v1` and records run-level metad
 | `image_width`, `image_height` | RGB camera resolution. |
 | `route_command` | Route command label, e.g. `lane_follow`. |
 | `target_speed_mps` | Target speed in meters per second. |
+| `weather_preset` | CARLA weather preset used by the run when set. |
 
 ## `metadata.jsonl`
 

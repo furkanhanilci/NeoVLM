@@ -24,6 +24,7 @@ class DatasetManifest:
     image_height: int
     route_command: str
     target_speed_mps: float
+    weather_preset: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

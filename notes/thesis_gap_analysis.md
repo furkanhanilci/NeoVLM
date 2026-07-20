@@ -45,6 +45,16 @@ Ranked by impact on thesis feasibility.
   is not just an optimization but a necessity. This is thesis-relevant evidence.
 - 4B outlook: 4B bf16 (~8-9 GB) will not fit; 4-bit 4B (~5-6 GB) may, tightly. The
   config-swap upgrade path (T-009) plus offline feature caching keeps 4B reachable.
+- **Live full-stack VRAM (T-015, measured 2026-07-21):** the 4.17 GB figure is
+  **VLM-only**. Running the VLM *live in the closed loop alongside CARLA* does NOT
+  fit on the 8 GB card: **CARLA offscreen ~4.8 GiB + Qwen bf16 load ~3.94 GiB > 8 GB
+  → OOM.** The live bridge smoke therefore had to fall back to a **CPU** policy
+  server. **Thesis-relevant:** this is direct empirical evidence that keeping the VLM
+  on the control-loop GPU with the simulator is infeasible on commodity 8 GB
+  hardware → it strengthens the core argument for **offline feature caching +
+  slow-fast async decoupling** (precompute frozen hidden states off the render GPU,
+  keep only the tiny resampler/policy on the runtime path). A 4-bit stack
+  (`bitsandbytes`) or a second GPU would be needed for genuinely live VLM-in-loop.
 - Original analysis retained below for context.
 
 ### G1 (original) — Hardware / VRAM feasibility

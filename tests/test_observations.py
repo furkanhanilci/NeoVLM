@@ -1,3 +1,5 @@
+import pytest
+
 from vlm_driving.carla.observations import (
     ControlState,
     EgoState,
@@ -8,6 +10,7 @@ from vlm_driving.carla.observations import (
     RouteState,
     SensorFrame,
     TerminationState,
+    control_to_normalized_action,
 )
 
 
@@ -33,6 +36,23 @@ def test_control_state_clips_to_carla_ranges():
         "brake": 0.0,
         "hand_brake": True,
         "reverse": False,
+    }
+
+
+def test_control_to_normalized_action_uses_throttle_minus_brake():
+    control = ControlState(throttle=0.7, steer=0.25, brake=0.2)
+
+    action = control_to_normalized_action(control)
+    roundtrip = action.to_control()
+
+    assert action.steer == 0.25
+    assert action.acceleration == pytest.approx(0.5)
+    assert roundtrip.steer == 0.25
+    assert roundtrip.throttle == pytest.approx(0.5)
+    assert roundtrip.brake == 0.0
+    assert control_to_normalized_action({"steer": -2.0, "throttle": 0.25, "brake": 1.75}).to_dict() == {
+        "steer": -1.0,
+        "acceleration": -1.0,
     }
 
 

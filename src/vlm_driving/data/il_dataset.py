@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from vlm_driving.config import ExperimentConfig
+from vlm_driving.carla.observations import control_to_normalized_action
 from vlm_driving.vlm.feature_cache import CachedFeatureReader
 
 ROUTE_COMMANDS: tuple[str, ...] = (
@@ -219,9 +220,8 @@ def _expert_action(record: dict[str, Any]) -> tuple[float, float]:
 
 
 def _action_from_control(control: dict[str, Any]) -> tuple[float, float]:
-    steer = _clip(_to_float(control.get("steer")), -1.0, 1.0)
-    acceleration = _clip(_to_float(control.get("throttle")) - _to_float(control.get("brake")), -1.0, 1.0)
-    return steer, acceleration
+    action = control_to_normalized_action(control)
+    return action.steer, action.acceleration
 
 
 def _dict(value: Any) -> dict[str, Any]:

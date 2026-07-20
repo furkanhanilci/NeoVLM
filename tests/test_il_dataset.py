@@ -145,6 +145,21 @@ def test_il_dataset_can_run_without_feature_cache(tmp_path: Path):
     assert dataset[0]["cached_hidden"] is None
 
 
+def test_il_dataset_control_action_mapping_uses_throttle_minus_brake(tmp_path: Path):
+    episode_dir = tmp_path / "episode_000"
+    frames_dir = episode_dir / "frames"
+    frames_dir.mkdir(parents=True)
+    (frames_dir / "frame_00000.png").write_bytes(b"frame")
+    _write_jsonl(
+        episode_dir / "metadata.jsonl",
+        [_record(step=0, camera_path="frames/frame_00000.png", steer=0.4, throttle=0.7, brake=0.2)],
+    )
+
+    dataset = ILDataset(episode_dir, config=_tiny_config())
+
+    assert torch.equal(dataset[0]["expert_action"], torch.tensor([0.4, 0.5], dtype=torch.float32))
+
+
 def test_il_dataset_validates_two_dim_action_config(tmp_path: Path):
     bad_config = ExperimentConfig(policy=PolicyConfig(action_dim=3, residual_limit=(0.1, 0.2, 0.3)))
 

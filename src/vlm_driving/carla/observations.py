@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 RouteCommand = Literal[
     "lane_follow",
@@ -109,6 +109,27 @@ class NormalizedAction:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self.clipped())
+
+
+def control_to_normalized_action(control: ControlState | Mapping[str, Any]) -> NormalizedAction:
+    if isinstance(control, ControlState):
+        steer = control.steer
+        throttle = control.throttle
+        brake = control.brake
+    else:
+        steer = _to_float(control.get("steer"))
+        throttle = _to_float(control.get("throttle"))
+        brake = _to_float(control.get("brake"))
+    return NormalizedAction(steer=steer, acceleration=throttle - brake).clipped()
+
+
+def _to_float(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @dataclass(frozen=True)

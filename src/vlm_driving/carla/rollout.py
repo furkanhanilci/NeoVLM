@@ -22,6 +22,7 @@ from vlm_driving.carla.observations import (
     EventState,
     NormalizedAction,
     PolicyState,
+    control_to_normalized_action,
     RolloutRecord,
     RouteState,
     SensorFrame,
@@ -57,6 +58,7 @@ class RolloutConfig:
     policy_server_host: str = "127.0.0.1"
     policy_server_port: int = 8765
     policy_server_timeout_s: float = 60.0
+    weather_preset: str | None = None
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -96,8 +98,7 @@ def _safe_action(frame_idx: int, speed_mps: float, target_speed_mps: float) -> N
 
 
 def _control_to_action(control: ControlState) -> NormalizedAction:
-    acceleration = control.throttle if control.throttle >= control.brake else -control.brake
-    return NormalizedAction(steer=control.steer, acceleration=acceleration)
+    return control_to_normalized_action(control)
 
 
 def _carla_control_to_state(control: carla.VehicleControl) -> ControlState:
@@ -115,6 +116,13 @@ def _choose_spawn_point(world: carla.World, rng: random.Random) -> carla.Transfo
     if not spawn_points:
         raise RuntimeError("CARLA map has no spawn points")
     return rng.choice(spawn_points)
+
+
+def _weather_preset(name: str) -> carla.WeatherParameters:
+    preset = getattr(carla.WeatherParameters, name, None)
+    if preset is None:
+        raise ValueError(f"unknown CARLA weather preset: {name}")
+    return preset
 
 
 def _make_camera_frame(
@@ -195,6 +203,7 @@ def run_rollout(config: RolloutConfig) -> Path:
     world = client.get_world()
     map_name = world.get_map().name
     original_settings = world.get_settings()
+    original_weather = world.get_weather()
     traffic_manager = client.get_trafficmanager(config.traffic_manager_port)
 
     vehicle = None
@@ -210,6 +219,9 @@ def run_rollout(config: RolloutConfig) -> Path:
     remote_policy = None
 
     try:
+        if config.weather_preset is not None:
+            world.set_weather(_weather_preset(config.weather_preset))
+
         settings = world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = config.fixed_delta_seconds
@@ -378,6 +390,7 @@ def run_rollout(config: RolloutConfig) -> Path:
                     image_height=config.image_height,
                     route_command=config.route_command,
                     target_speed_mps=config.target_speed_mps,
+                    weather_preset=config.weather_preset,
                 )
             )
             write_rollout_metrics(output_dir / "metrics.json", written_records)
@@ -396,5 +409,7 @@ def run_rollout(config: RolloutConfig) -> Path:
             if actor.is_alive:
                 actor.destroy()
         traffic_manager.set_synchronous_mode(False)
+        if config.weather_preset is not None:
+            world.set_weather(original_weather)
         world.apply_settings(original_settings)
         time.sleep(0.2)
