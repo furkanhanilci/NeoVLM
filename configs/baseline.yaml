@@ -1,0 +1,38 @@
+seed: 0
+stage: il
+
+vlm:
+  model_id: Qwen/Qwen3-VL-8B-Instruct
+  freeze: true
+  hidden_size: 4096
+  token_dim: 512
+  max_image_tokens: 256
+
+resampler:
+  num_queries: 32
+  input_dim: 4096
+  output_dim: 512
+  num_heads: 8
+  dropout: 0.1
+
+rationale:
+  token_dim: 512
+  hidden_dim: 256
+  risk_classes: 4
+  meta_actions: 6
+
+policy:
+  obs_dim: 64
+  token_dim: 512
+  hidden_dim: 256
+  action_dim: 3
+  max_token_age_s: 0.5
+  residual_limit: [0.15, 0.2, 0.2]
+
+reward:
+  collision_penalty: 5.0
+  lane_penalty: 1.0
+  red_light_penalty: 2.0
+  risk_weight: 0.25
+  meta_action_weight: 0.1
+  progress_weight: 1.0

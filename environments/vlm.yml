@@ -1,0 +1,40 @@
+name: vlm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - pillow
+  - opencv
+  - libjxl=0.11.*
+  - matplotlib
+  - tqdm
+  - rich
+  - ipykernel
+  - pip:
+      - torch
+      - torchvision
+      - torchaudio
+      - transformers
+      - accelerate
+      - datasets
+      - huggingface_hub
+      - safetensors
+      - sentencepiece
+      - protobuf
+      - einops
+      - timm
+      - qwen-vl-utils
+      - wandb
+      - mlflow
+      - gymnasium
+      - stable-baselines3
+      - sb3-contrib
+      - hydra-core
+      - omegaconf
+      - tensorboard
+

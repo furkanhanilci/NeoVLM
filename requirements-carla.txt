@@ -1,0 +1,14 @@
+carla==0.9.15
+pygame
+numpy
+networkx
+shapely
+psutil
+xmlschema
+py-trees
+ephem
+tabulate
+tqdm
+dictor
+transforms3d
+

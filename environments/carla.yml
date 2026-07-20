@@ -1,0 +1,22 @@
+name: carla
+channels:
+  - conda-forge
+dependencies:
+  - python=3.8
+  - pip
+  - numpy
+  - pygame
+  - networkx
+  - shapely
+  - psutil
+  - xmlschema
+  - ephem
+  - tabulate
+  - tqdm
+  - pillow
+  - opencv
+  - pip:
+      - carla==0.9.15
+      - py-trees
+      - dictor
+      - transforms3d

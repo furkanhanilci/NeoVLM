@@ -1,0 +1,96 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+.env.*
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local logs and generated run outputs
+logs/
+setup_logs/
+results/
+experiments/runs/
+wandb/
+mlruns/
+
+# Large local research assets
+datasets/
+checkpoints/
+/models/
+weights/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.bin
+
+# Third-party downloads and cloned benchmark/tooling repos
+third_party/
+
+# Thesis generated outputs and Quarto cache
+thesis/.quarto/
+thesis/_freeze/
+thesis/main.pdf
+thesis/main.docx
+thesis/*.aux
+thesis/*.bbl
+thesis/*.bcf
+thesis/*.blg
+thesis/*.log
+thesis/*.out
+thesis/*.run.xml
+thesis/*.toc
+
+# CARLA archives and imports
+*.tar.gz
+*.tar.bz2
+*.zip
+*.7z
+*.egg
+
+# AI coordination scratch files — process/decision notebook, excluded from VCS
+AI_COORDINATION.md
+AI_TASKS.md
+AI_REVIEW.md
+
+# Keep source/config/docs visible even with broad generated-output ignores
+!.gitignore
+!README.md
+!SETUP_STATUS.md
+!Makefile
+!src/
+!src/**
+!scripts/
+!scripts/**
+!configs/
+!configs/**
+!environments/
+!environments/**
+!notes/
+!notes/**
+!thesis/
+!thesis/main.qmd
+!thesis/references.bib
+!thesis/chapters/
+!thesis/chapters/**
+
+# Whitelist'lenmiş kaynak ağaçlarında bile cache/bytecode'u tekrar hariç tut
+**/__pycache__/
+*.py[cod]

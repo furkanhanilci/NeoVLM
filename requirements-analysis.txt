@@ -1,0 +1,16 @@
+numpy
+scipy
+pandas
+scikit-learn
+matplotlib
+seaborn
+plotly
+tqdm
+rich
+umap-learn
+openTSNE
+jupyterlab
+ipykernel
+nbconvert
+bootstrapped
+

@@ -1,0 +1,25 @@
+name: analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - plotly
+  - tqdm
+  - rich
+  - umap-learn
+  - openTSNE
+  - jupyterlab
+  - ipykernel
+  - nbconvert
+  - pandoc
+  - quarto
+  - pip:
+      - bootstrapped
+

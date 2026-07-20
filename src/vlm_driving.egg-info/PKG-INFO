@@ -1,0 +1,98 @@
+Metadata-Version: 2.1
+Name: vlm-driving
+Version: 0.1.0
+Summary: Research components for VLM-guided closed-loop autonomous driving.
+Author-email: Furkan Hanilçi <h.furkan90@gmail.com>
+License: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+# VLM Driving Thesis Environment
+
+This workspace targets closed-loop autonomous driving research with frozen Qwen3-VL, query resampling, structured driving rationales, async slow-fast token caching, staleness-aware fast policies, IL warm-start, bounded residual PPO, and VLM-guided reward shaping on CARLA / Leaderboard / Bench2Drive.
+
+## Layout
+
+- `thesis/`: Quarto thesis draft and chapter markdown files.
+- `configs/`: experiment and environment configs.
+- `scripts/`: setup and smoke-test scripts.
+- `third_party/`: external repos such as CARLA tooling, ScenarioRunner, Leaderboard, Bench2Drive.
+- `datasets/`: local datasets and benchmark assets.
+- `checkpoints/`: model checkpoints and downloaded weights.
+- `results/`, `logs/`, `setup_logs/`: experiment outputs and setup logs.
+
+## Shell Setup
+
+Micromamba is installed at `~/bin/micromamba`. Add it to the shell path if needed:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+```
+
+Create environments:
+
+```bash
+micromamba env create -f environments/carla.yml
+micromamba env create -f environments/vlm.yml
+micromamba env create -f environments/analysis.yml
+```
+
+For reproducible environment recreation, prefer the resolved lock exports after
+the initial setup has been validated:
+
+```bash
+micromamba env create -f environments/carla.lock.yml
+micromamba env create -f environments/vlm.lock.yml
+micromamba env create -f environments/analysis.lock.yml
+```
+
+The lock files are generated with `micromamba env export`; build strings and pip
+package versions may still be platform-specific. The machine-local `prefix:`
+entry is intentionally removed.
+
+Run checks:
+
+```bash
+make check-gpu
+make check-torch
+make smoke
+```
+
+CARLA and Bench2Drive require external assets and may require license or dataset access. Put CARLA under `third_party/CARLA_0.9.15` unless a script states otherwise.
+
+## Research Matrix
+
+Core comparisons:
+
+- pooled VLM vs query resampler
+- hidden state vs generated text vs pooled embedding
+- no temporal memory vs GRU vs LSTM vs temporal transformer
+- no-CoT vs structured rationale
+- risk-only vs meta-action-only vs risk+meta-action
+- sync vs async
+- no token age vs token age
+- no staleness augmentation vs staleness augmentation
+- IL-only vs PPO from scratch vs full fine-tune PPO vs residual PPO
+- VLM reward off vs risk penalty vs meta-action consistency vs combined
+- CoVLA only vs CARLA only vs mixed fine-tuning
+- minimum 3 seeds, preferably 5
+
+Primary metrics:
+
+- Route Completion
+- Driving Score
+- Infraction Score
+- collision breakdown
+- red light / stop sign / lane violation
+- comfort / jerk
+- p50/p95 latency
+- sample efficiency
+- failure-case videos
+- bootstrap confidence intervals
+- paired route comparison
+- mean +- std
+
