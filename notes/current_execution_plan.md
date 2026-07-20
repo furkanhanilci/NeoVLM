@@ -55,10 +55,12 @@ Success criterion: with CARLA running, the script completes a short rollout and 
 
 - Dummy token provider first.
 - Frozen VLM loader later, gated by HF token/checkpoint availability.
-- **Decision (2026-07-20): use a smaller VLM (Qwen3-VL-2B/4B class), not 8B.**
-  RTX 5060 has only 8 GB VRAM; an 8B VLM cannot coexist with CARLA render + PPO
-  rollouts on the same GPU. Update `configs/baseline.yaml` and `config.py`
-  (`model_id`, `hidden_size`) when M4 starts. See `notes/thesis_gap_analysis.md` G1.
+- **Decision (2026-07-20): start with Qwen3-VL-2B, keep a config-swap upgrade path
+  to 4B.** RTX 5060 has only 8 GB VRAM; an 8B VLM cannot coexist with CARLA render +
+  PPO rollouts. Begin on 2B (fast iteration), upgrade to 4B only after the full
+  IL->PPO->eval loop is green. `hidden_size` is read from the model config and
+  `resampler.input_dim` derives from it, so upgrading is a config swap + retrain,
+  not a code rewrite (T-009 + its "2B -> 4B" note). See `thesis_gap_analysis.md` G1.
 - Consider **offline feature caching**: run the frozen VLM outside the loop and
   precompute query-resampled tokens to disk for IL/PPO to read (aligns with the
   async slow-fast cache thesis; reduces GPU contention).
