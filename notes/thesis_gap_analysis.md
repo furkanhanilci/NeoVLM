@@ -34,7 +34,20 @@ change. The thesis core idea remains fixed.
 
 Ranked by impact on thesis feasibility.
 
-### G1 (critical) — Hardware / VRAM feasibility
+### G1 — Hardware / VRAM feasibility — MEASURED / DE-RISKED (2026-07-20)
+
+- **Measured (T-010, verified twice on RTX 5060 8 GB):** frozen Qwen3-VL-2B in
+  bf16 → **peak VRAM 4.17 GB**, single forward p50 98 ms / p95 588 ms, real hidden
+  states `[1, 366, 2048]`. No quantization needed; ~3 GB headroom for CARLA + policy.
+- **Implication:** 2B is comfortably feasible on this hardware. The ~100 ms VLM
+  forward also empirically motivates the thesis core: the VLM cannot run at control
+  frequency (~20 Hz), so slow-fast async decoupling + staleness-aware token caching
+  is not just an optimization but a necessity. This is thesis-relevant evidence.
+- 4B outlook: 4B bf16 (~8-9 GB) will not fit; 4-bit 4B (~5-6 GB) may, tightly. The
+  config-swap upgrade path (T-009) plus offline feature caching keeps 4B reachable.
+- Original analysis retained below for context.
+
+### G1 (original) — Hardware / VRAM feasibility
 - Host GPU is RTX 5060, **8 GB VRAM** (`SETUP_STATUS.md`). Qwen3-VL-8B weights in
   fp16 are ~16 GB; even 4-bit (~5-6 GB) plus vision encoder, KV cache, the trained
   resampler/policy/rationale heads, and CARLA render + PPO rollouts on the same GPU
