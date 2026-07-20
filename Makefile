@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: check-gpu check-torch check-carla check-bench2drive check-docker-gpu check-research test token-smoke smoke carla-server carla-start carla-window carla-status carla-rollout-smoke carla-dataset-smoke validate-carla-dataset thesis-pdf
+.PHONY: check-gpu check-torch check-carla check-bench2drive check-docker-gpu check-research test token-smoke vlm-smoke smoke carla-server carla-start carla-window carla-status carla-rollout-smoke carla-dataset-smoke validate-carla-dataset thesis-pdf
 
 check-gpu:
 	./scripts/check_gpu.sh
@@ -25,6 +25,9 @@ test:
 
 token-smoke:
 	./scripts/run_token_pipeline_smoke.sh
+
+vlm-smoke:
+	./scripts/run_vlm_provider_smoke.sh
 
 smoke:
 	./scripts/run_smoke_tests.sh

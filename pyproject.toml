@@ -28,7 +28,8 @@ vlm_driving = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not carla'"
+addopts = "-q -m 'not carla and not vlm'"
 markers = [
   "carla: tests that require CARLA PythonAPI or a running simulator",
+  "vlm: tests that require GPU and real VLM weights",
 ]
