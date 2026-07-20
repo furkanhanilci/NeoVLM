@@ -13,7 +13,7 @@ from torch.utils.data import Dataset
 
 from vlm_driving.config import ExperimentConfig
 from vlm_driving.carla.observations import control_to_normalized_action
-from vlm_driving.vlm.feature_cache import CachedFeatureReader
+from vlm_driving.vlm.feature_cache import CachedFeatureReader, MANIFEST_NAME
 
 ROUTE_COMMANDS: tuple[str, ...] = (
     "lane_follow",
@@ -81,18 +81,20 @@ class ILDataset(Dataset):
             )
 
         self.episode_dirs = _as_episode_dirs(episode_dirs)
+        self.readers_by_episode_dir = _cache_readers_by_episode(
+            self.episode_dirs,
+            feature_cache_dir=feature_cache_dir,
+            expected_model_id=self.config.vlm.model_id,
+            expected_hidden_size=self.config.vlm.hidden_size,
+        )
         self.reader: CachedFeatureReader | None = None
-        cache_keys: set[str] | None = None
-        if feature_cache_dir is not None:
-            self.reader = CachedFeatureReader(
-                feature_cache_dir,
-                expected_model_id=self.config.vlm.model_id,
-                expected_hidden_size=self.config.vlm.hidden_size,
-            )
-            cache_keys = set(self.reader.keys())
+        if len(set(self.readers_by_episode_dir.values())) == 1 and self.readers_by_episode_dir:
+            self.reader = next(iter(self.readers_by_episode_dir.values()))
 
         records: list[ILDatasetRecord] = []
         for episode_dir in self.episode_dirs:
+            cache_reader = self.readers_by_episode_dir.get(episode_dir)
+            cache_keys = set(cache_reader.keys()) if cache_reader is not None else None
             metadata_path = episode_dir / metadata_filename
             if not metadata_path.exists():
                 raise FileNotFoundError(f"metadata file does not exist: {metadata_path}")
@@ -119,8 +121,9 @@ class ILDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = self.records[index]
         cached_hidden = None
-        if self.reader is not None:
-            cached_hidden = self.reader.read(record.frame_key)
+        cache_reader = self.readers_by_episode_dir.get(record.episode_dir)
+        if cache_reader is not None:
+            cached_hidden = cache_reader.read(record.frame_key)
 
         return {
             "observation": featurize_observation(
@@ -179,6 +182,53 @@ def _as_episode_dirs(episode_dirs: Sequence[str | Path] | str | Path) -> list[Pa
     if isinstance(episode_dirs, (str, Path)):
         return [Path(episode_dirs)]
     return [Path(path) for path in episode_dirs]
+
+
+def _cache_readers_by_episode(
+    episode_dirs: Sequence[Path],
+    feature_cache_dir: str | Path | None,
+    expected_model_id: str,
+    expected_hidden_size: int,
+) -> dict[Path, CachedFeatureReader]:
+    if feature_cache_dir is None:
+        return {}
+
+    cache_root = Path(feature_cache_dir)
+    if (cache_root / MANIFEST_NAME).exists():
+        shared_reader = CachedFeatureReader(
+            cache_root,
+            expected_model_id=expected_model_id,
+            expected_hidden_size=expected_hidden_size,
+        )
+        return {episode_dir: shared_reader for episode_dir in episode_dirs}
+
+    readers: dict[Path, CachedFeatureReader] = {}
+    missing: list[Path] = []
+    for episode_dir in episode_dirs:
+        episode_cache_dir = _episode_cache_dir(cache_root, episode_dir)
+        if not (episode_cache_dir / MANIFEST_NAME).exists():
+            missing.append(episode_cache_dir)
+            continue
+        readers[episode_dir] = CachedFeatureReader(
+            episode_cache_dir,
+            expected_model_id=expected_model_id,
+            expected_hidden_size=expected_hidden_size,
+        )
+    if missing:
+        raise FileNotFoundError(
+            "missing per-episode feature cache manifest(s): " + ", ".join(str(path / MANIFEST_NAME) for path in missing)
+        )
+    return readers
+
+
+def _episode_cache_dir(cache_root: Path, episode_dir: Path) -> Path:
+    candidate = cache_root / episode_dir.name
+    if (candidate / MANIFEST_NAME).exists():
+        return candidate
+    local_candidate = episode_dir / "feature_cache"
+    if (local_candidate / MANIFEST_NAME).exists():
+        return local_candidate
+    return candidate
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

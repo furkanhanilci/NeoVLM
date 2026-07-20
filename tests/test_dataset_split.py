@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from vlm_driving.data import discover_episodes, split_episodes, write_split_manifest
+from vlm_driving.data import discover_episodes, load_split_manifest, split_episodes, write_split_manifest
 
 
 def _episode(root: Path, name: str) -> Path:
@@ -66,3 +66,5 @@ def test_write_split_manifest_records_episode_level_labels(tmp_path: Path):
     assert data["num_val"] == 1
     assert {entry["split"] for entry in data["episodes"]} == {"train", "val"}
     assert all(entry["episode_dir"].startswith("episode_") for entry in data["episodes"])
+    loaded = load_split_manifest(manifest_path)
+    assert loaded == split

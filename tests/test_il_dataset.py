@@ -160,6 +160,53 @@ def test_il_dataset_control_action_mapping_uses_throttle_minus_brake(tmp_path: P
     assert torch.equal(dataset[0]["expert_action"], torch.tensor([0.4, 0.5], dtype=torch.float32))
 
 
+def _write_episode_cache(cache_dir: Path, model_id: str, hidden_size: int, value: float) -> None:
+    cache_dir.mkdir(parents=True)
+    hidden = torch.full((2, hidden_size), value, dtype=torch.bfloat16)
+    torch.save(hidden, cache_dir / "frame_00000.pt")
+    FeatureCacheManifest(
+        schema_version="vlm_hidden_cache_v1",
+        model_id=model_id,
+        hidden_size=hidden_size,
+        precision="bf16",
+        command_text="keep lane",
+        num_frames=1,
+        records=[
+            FeatureCacheRecord(
+                frame_key="frame_00000.png",
+                source_frame="frames/frame_00000.png",
+                cache_file="frame_00000.pt",
+                shape=[2, hidden_size],
+                dtype=str(hidden.dtype),
+            )
+        ],
+    ).write(cache_dir / "cache_manifest.json")
+
+
+def test_il_dataset_resolves_per_episode_cache_without_frame_name_collisions(tmp_path: Path):
+    config = _tiny_config()
+    episodes = []
+    for idx, value in enumerate((1.0, 2.0)):
+        episode_dir = tmp_path / f"episode_{idx:04d}"
+        frames_dir = episode_dir / "frames"
+        frames_dir.mkdir(parents=True)
+        (frames_dir / "frame_00000.png").write_bytes(f"frame-{idx}".encode("utf-8"))
+        _write_jsonl(
+            episode_dir / "metadata.jsonl",
+            [_record(step=0, camera_path="frames/frame_00000.png", steer=0.1 * idx, throttle=0.2)],
+        )
+        episodes.append(episode_dir)
+        _write_episode_cache(tmp_path / "cache" / episode_dir.name, config.vlm.model_id, config.vlm.hidden_size, value)
+
+    dataset = ILDataset(episodes, feature_cache_dir=tmp_path / "cache", config=config)
+
+    assert len(dataset) == 2
+    assert dataset[0]["frame_key"] == "frame_00000.png"
+    assert dataset[1]["frame_key"] == "frame_00000.png"
+    assert torch.all(dataset[0]["cached_hidden"] == 1.0)
+    assert torch.all(dataset[1]["cached_hidden"] == 2.0)
+
+
 def test_il_dataset_validates_two_dim_action_config(tmp_path: Path):
     bad_config = ExperimentConfig(policy=PolicyConfig(action_dim=3, residual_limit=(0.1, 0.2, 0.3)))
 

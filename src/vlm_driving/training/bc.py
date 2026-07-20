@@ -28,6 +28,7 @@ class BCTrainingResult:
     policy: FastPolicy
     loss_history: list[float]
     checkpoint_path: Path | None
+    validation_loss_history: list[float]
 
     @property
     def initial_loss(self) -> float:
@@ -50,6 +51,7 @@ class BCCheckpoint:
     policy: FastPolicy
     loss_history: list[float]
     path: Path
+    validation_loss_history: list[float]
 
 
 def build_bc_models(config: ExperimentConfig, device: str | torch.device = "cpu") -> tuple[QueryResampler, FastPolicy]:
@@ -77,6 +79,7 @@ def train_bc(
     device: str | torch.device | None = None,
     checkpoint_path: str | Path | None = None,
     shuffle: bool = True,
+    val_dataset: Dataset | None = None,
 ) -> BCTrainingResult:
     """Trains resampler + policy with MSE on the policy IL action head.
 
@@ -106,6 +109,7 @@ def train_bc(
     )
 
     loss_history: list[float] = []
+    validation_loss_history: list[float] = []
     for epoch in range(config.train.epochs):
         generator = torch.Generator().manual_seed(config.seed + epoch)
         loader = DataLoader(dataset, batch_size=None, shuffle=shuffle, generator=generator)
@@ -117,19 +121,74 @@ def train_bc(
                 pending.clear()
         if pending:
             loss_history.append(_train_batch(pending, resampler, policy, optimizer, target_device))
+        if val_dataset is not None:
+            validation_loss_history.append(evaluate_bc_loss(val_dataset, resampler, policy, config, target_device))
+            resampler.train()
+            policy.train()
 
     if not loss_history:
         raise RuntimeError("BC training completed without optimization steps")
 
     saved_path = Path(checkpoint_path) if checkpoint_path is not None else Path(config.train.checkpoint_path)
-    save_bc_checkpoint(saved_path, config, resampler, policy, loss_history)
+    save_bc_checkpoint(
+        saved_path,
+        config,
+        resampler,
+        policy,
+        loss_history,
+        validation_loss_history=validation_loss_history,
+    )
 
     return BCTrainingResult(
         resampler=resampler,
         policy=policy,
         loss_history=loss_history,
         checkpoint_path=saved_path,
+        validation_loss_history=validation_loss_history,
     )
+
+
+def evaluate_bc_loss(
+    dataset: Dataset,
+    resampler: QueryResampler,
+    policy: FastPolicy,
+    config: ExperimentConfig | None = None,
+    device: str | torch.device = "cpu",
+) -> float:
+    if len(dataset) == 0:  # type: ignore[arg-type]
+        raise ValueError("BC evaluation requires a non-empty dataset")
+    if config is None:
+        config = getattr(dataset, "config", ExperimentConfig())
+    _validate_train_config(config.train)
+
+    target_device = torch.device(device)
+    was_resampler_training = resampler.training
+    was_policy_training = policy.training
+    resampler.eval()
+    policy.eval()
+    total_loss = 0.0
+    total_samples = 0
+    pending: list[dict[str, Any]] = []
+    loader = DataLoader(dataset, batch_size=None, shuffle=False)
+    with torch.no_grad():
+        for sample in loader:
+            pending.append(sample)
+            if len(pending) == config.train.batch_size:
+                batch_loss, batch_size = _eval_batch(pending, resampler, policy, target_device)
+                total_loss += batch_loss * batch_size
+                total_samples += batch_size
+                pending.clear()
+        if pending:
+            batch_loss, batch_size = _eval_batch(pending, resampler, policy, target_device)
+            total_loss += batch_loss * batch_size
+            total_samples += batch_size
+    if was_resampler_training:
+        resampler.train()
+    if was_policy_training:
+        policy.train()
+    if total_samples == 0:
+        raise RuntimeError("BC evaluation completed without samples")
+    return total_loss / total_samples
 
 
 def predict_il_action(
@@ -176,6 +235,7 @@ def save_bc_checkpoint(
     resampler: QueryResampler,
     policy: FastPolicy,
     loss_history: Sequence[float],
+    validation_loss_history: Sequence[float] | None = None,
 ) -> Path:
     checkpoint_path = Path(path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,6 +247,7 @@ def save_bc_checkpoint(
             "resampler_state_dict": resampler.state_dict(),
             "policy_state_dict": policy.state_dict(),
             "loss_history": [float(loss) for loss in loss_history],
+            "validation_loss_history": [float(loss) for loss in (validation_loss_history or [])],
         },
         checkpoint_path,
     )
@@ -215,6 +276,7 @@ def load_bc_checkpoint(path: str | Path, map_location: str | torch.device = "cpu
         policy=policy,
         loss_history=[float(loss) for loss in data["loss_history"]],
         path=checkpoint_path,
+        validation_loss_history=[float(loss) for loss in data.get("validation_loss_history", [])],
     )
 
 
@@ -232,6 +294,19 @@ def experiment_config_from_dict(data: dict[str, Any]) -> ExperimentConfig:
         reward=RewardConfig(**data.get("reward", {})),
         train=TrainConfig(**data.get("train", {})),
     )
+
+
+def _eval_batch(
+    samples: Sequence[dict[str, Any]],
+    resampler: QueryResampler,
+    policy: FastPolicy,
+    device: torch.device,
+) -> tuple[float, int]:
+    observation, compact_tokens, expert_action = make_bc_batch(samples, resampler, device)
+    token_age_s = torch.zeros(observation.shape[0], dtype=torch.float32, device=device)
+    output = policy(observation, compact_tokens, token_age_s)
+    loss = F.mse_loss(output["il_action"], expert_action)
+    return float(loss.detach().cpu()), observation.shape[0]
 
 
 def _train_batch(
@@ -266,6 +341,7 @@ __all__ = [
     "BCCheckpoint",
     "BCTrainingResult",
     "build_bc_models",
+    "evaluate_bc_loss",
     "experiment_config_from_dict",
     "load_bc_checkpoint",
     "make_bc_batch",

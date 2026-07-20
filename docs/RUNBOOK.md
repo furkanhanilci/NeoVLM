@@ -45,6 +45,8 @@ Use `make carla-window` instead of `make carla-start` when a visible CARLA windo
 | `make carla-dataset-smoke` | `scripts/run_carla_dataset_smoke.sh` | `micromamba run -n carla` | Runs the IL dataset smoke path. |
 | `make carla-dataset-collect` | `scripts/run_carla_dataset_collect.sh` | `carla` collection + `vlm` split manifest | Collects multiple autopilot episodes and writes `split_manifest.json`; actual CARLA run is T-017. |
 | `make bc-smoke` | `scripts/run_bc_smoke.sh` | `micromamba run -n vlm` | Trains the tiny BC policy on the cached feature smoke set and writes `results/bc_smoke/bc_checkpoint.pt`. |
+| `make feature-cache-dataset` | `scripts/build_feature_cache_dataset.sh` | `micromamba run -n vlm` + CUDA | Builds per-episode frozen-Qwen caches for `results/datasets/carla_il_collect/`. |
+| `make bc-train` | `scripts/run_bc_train.sh` | `micromamba run -n vlm` | Trains BC on the train split and reports validation loss. |
 | `make bc-rollout-smoke` | `scripts/run_bc_rollout_smoke.sh` | deprecated in this split env | In-process learned-policy rollout path; use `make bc-bridge-smoke` instead because CARLA and torch/VLM run in separate envs. |
 | `make bc-bridge-smoke` | `scripts/run_bc_bridge_smoke.sh` | `vlm` policy server + `carla` rollout client | Runs the two-process learned-policy bridge into `results/bc_bridge_smoke/`; requires a running CARLA server. |
 | `make validate-carla-dataset` | `scripts/validate_carla_dataset.py` | script shebang/current Python | Validates `results/datasets/carla_il_smoke/episode_000`. |
@@ -110,6 +112,16 @@ CARLA_NUM_EPISODES=50 CARLA_FRAMES_PER_EPISODE=200 CARLA_SAVE_EVERY_N_FRAMES=5 m
 ```
 
 The script writes episodes under `results/datasets/carla_il_collect/episode_XXXX/` and an episode-level `split_manifest.json` at the dataset root.
+
+After collection, keep CARLA closed so the VLM has GPU memory, then build per-episode caches and train BC on the split:
+
+```bash
+make carla-status   # should show no CARLA process before GPU cache build
+make feature-cache-dataset
+make bc-train
+```
+
+`make feature-cache-dataset` writes `results/feature_cache/carla_il_collect/episode_XXXX/cache_manifest.json`, one cache namespace per episode. This avoids collisions from repeated frame names like `frame_00000.png`. `make bc-train` reads `split_manifest.json`, trains on train episodes, evaluates validation loss each epoch, and writes `results/bc_train/bc_checkpoint.pt`.
 
 ## Rollout Output
 

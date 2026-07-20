@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import Dataset
 
 from vlm_driving.config import ExperimentConfig, PolicyConfig, ResamplerConfig, TrainConfig, VLMConfig
-from vlm_driving.training import load_bc_checkpoint, predict_il_action, train_bc
+from vlm_driving.training import evaluate_bc_loss, load_bc_checkpoint, predict_il_action, train_bc
 
 
 class TinyCachedILDataset(Dataset):
@@ -73,6 +73,28 @@ def test_train_bc_overfits_tiny_cached_dataset_and_checkpoint_roundtrip(tmp_path
     assert loaded.config.policy.action_dim == 2
     assert loaded.config.policy.residual_limit == (0.1, 0.1)
     assert loaded.loss_history == result.loss_history
+
+
+def test_train_bc_records_validation_loss_history_in_checkpoint(tmp_path: Path):
+    train_dataset = TinyCachedILDataset()
+    val_dataset = TinyCachedILDataset()
+    config = train_dataset.config
+    checkpoint_path = tmp_path / "bc_val.pt"
+
+    result = train_bc(
+        train_dataset,
+        config=config,
+        device="cpu",
+        checkpoint_path=checkpoint_path,
+        val_dataset=val_dataset,
+    )
+
+    assert len(result.validation_loss_history) == config.train.epochs
+    assert result.validation_loss_history[-1] == pytest.approx(
+        evaluate_bc_loss(val_dataset, result.resampler, result.policy, config=config, device="cpu")
+    )
+    loaded = load_bc_checkpoint(checkpoint_path, map_location="cpu")
+    assert loaded.validation_loss_history == result.validation_loss_history
 
 
 def test_train_bc_requires_cached_hidden_states():

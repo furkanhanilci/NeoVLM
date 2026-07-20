@@ -53,6 +53,31 @@ def split_episodes(episodes: Sequence[str | Path], val_ratio: float = 0.15, seed
     return EpisodeSplit(train=tuple(train), val=tuple(val))
 
 
+def load_split_manifest(path: str | Path, dataset_root: str | Path | None = None) -> EpisodeSplit:
+    manifest_path = Path(path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if data.get("schema_version") != "episode_split_v1":
+        raise ValueError(f"unsupported split manifest schema: {data.get('schema_version')}")
+    root = Path(dataset_root) if dataset_root is not None else manifest_path.parent
+    train: list[Path] = []
+    val: list[Path] = []
+    for entry in data.get("episodes", []):
+        episode_dir = Path(str(entry["episode_dir"]))
+        if not episode_dir.is_absolute():
+            episode_dir = root / episode_dir
+        split_name = str(entry["split"])
+        if split_name == "train":
+            train.append(episode_dir)
+        elif split_name == "val":
+            val.append(episode_dir)
+        else:
+            raise ValueError(f"unsupported split label: {split_name}")
+    return EpisodeSplit(
+        train=tuple(sorted(train, key=lambda item: item.as_posix())),
+        val=tuple(sorted(val, key=lambda item: item.as_posix())),
+    )
+
+
 def write_split_manifest(
     output_path: str | Path,
     split: EpisodeSplit,
@@ -89,4 +114,4 @@ def _display_path(path: Path, root: Path | None) -> str:
     return path.as_posix()
 
 
-__all__ = ["EpisodeSplit", "discover_episodes", "split_episodes", "write_split_manifest"]
+__all__ = ["EpisodeSplit", "discover_episodes", "load_split_manifest", "split_episodes", "write_split_manifest"]
