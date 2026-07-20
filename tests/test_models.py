@@ -28,7 +28,7 @@ def test_structured_rationale_head_shapes_and_input_validation():
 
 
 def test_fast_policy_shapes_and_action_bounds():
-    policy = FastPolicy(obs_dim=5, token_dim=8, hidden_dim=12, action_dim=3, residual_limits=(0.1, 0.2, 0.3))
+    policy = FastPolicy(obs_dim=5, token_dim=8, hidden_dim=12, action_dim=2, residual_limits=(0.1, 0.2))
 
     output = policy(
         observation=torch.randn(2, 5),
@@ -36,9 +36,9 @@ def test_fast_policy_shapes_and_action_bounds():
         token_age_s=torch.tensor([0.0, 0.5]),
     )
 
-    assert output["il_action"].shape == (2, 3)
-    assert output["residual"].shape == (2, 3)
-    assert output["action"].shape == (2, 3)
+    assert output["il_action"].shape == (2, 2)
+    assert output["residual"].shape == (2, 2)
+    assert output["action"].shape == (2, 2)
     assert output["value"].shape == (2,)
     assert torch.all(output["action"] <= 1.0)
     assert torch.all(output["action"] >= -1.0)

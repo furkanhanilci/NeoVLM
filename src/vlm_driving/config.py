@@ -37,9 +37,9 @@ class PolicyConfig:
     obs_dim: int = 64
     token_dim: int = 512
     hidden_dim: int = 256
-    action_dim: int = 3
+    action_dim: int = 2
     max_token_age_s: float = 0.5
-    residual_limit: tuple[float, ...] = (0.15, 0.2, 0.2)
+    residual_limit: tuple[float, ...] = (0.15, 0.2)
 
 
 @dataclass(frozen=True)
