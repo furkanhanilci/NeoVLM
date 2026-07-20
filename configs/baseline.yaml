@@ -36,3 +36,10 @@ reward:
   risk_weight: 0.25
   meta_action_weight: 0.1
   progress_weight: 1.0
+
+train:
+  batch_size: 1
+  epochs: 80
+  learning_rate: 0.001
+  weight_decay: 0.0
+  checkpoint_path: results/bc_smoke/bc_checkpoint.pt

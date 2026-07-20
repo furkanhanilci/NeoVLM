@@ -53,6 +53,15 @@ class RewardConfig:
 
 
 @dataclass(frozen=True)
+class TrainConfig:
+    batch_size: int = 1
+    epochs: int = 80
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.0
+    checkpoint_path: str = "results/bc_smoke/bc_checkpoint.pt"
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     seed: int = 0
     stage: Literal["il", "ppo", "eval"] = "il"
@@ -61,6 +70,7 @@ class ExperimentConfig:
     rationale: RationaleConfig = field(default_factory=RationaleConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
+    train: TrainConfig = field(default_factory=TrainConfig)
 
     def __post_init__(self) -> None:
         if self.resampler.input_dim != self.vlm.hidden_size:
