@@ -1,14 +1,36 @@
 # Current Execution Plan
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
-## Current State
+## Current State (2026-07-21)
 
-The local research environment is ready: GPU/PyTorch, CARLA 0.9.15, Leaderboard, ScenarioRunner, Bench2Drive, thesis rendering, and the initial VLM driving model scaffold are in place. CARLA can run in offscreen mode or windowed mode. The current missing layer is the closed-loop CARLA interaction and data collection pipeline.
+The local research environment is ready and the **full perception→policy→IL→live
+closed-loop pipeline is implemented and verified**. Done: M1-M3 (rollout/obs/logger),
+M4 (frozen Qwen3-VL-2B provider + offline feature cache), M5 IL (BC train + BC agent +
+two-process live bridge — learned policy drove closed-loop in CARLA), and M-data scale
+(T-016..T-019: 50 episode / 2000 frame dataset, collision-free per-episode cache,
+BC train/val with **held-out val loss 0.0420→0.0100 at scale**, ~4.2x improvement).
 
-## Immediate Objective
+**The current missing layer is thesis-grade closed-loop EVALUATION.** We measure val
+loss (open-loop imitation error), but the thesis claim is judged by closed-loop driving
+metrics (Route Completion, Driving Score, Infraction breakdown — gap G7). There is no
+scored-eval harness yet; `carla/metrics.py` only computes basic rollout aggregates
+(distance, collision count, mean speed). The thesis novelty components are also still
+absent/stub: temporal memory (G2), rationale label source (G3), real async +
+staleness augmentation (G8), residual PPO loop, VLM reward integration.
 
-Build the first runnable closed-loop CARLA smoke pipeline before adding Qwen, imitation learning, PPO, or full Bench2Drive evaluation.
+## Immediate Objective (revised 2026-07-21)
+
+Build the **closed-loop evaluation harness and thesis metrics (M-eval / G7) NEXT**,
+pulled ahead of M-mem/M6. Rationale: no component (memory, PPO, representation) can be
+shown to help without scored closed-loop measurement; val loss is not the thesis
+metric. M-eval converts the existing IL policy into the first genuine thesis result
+(a Driving Score) and becomes the measuring stick for every later ablation.
+
+## Historical Objective (M1, completed 2026-07-20)
+
+The first pipeline built the runnable closed-loop CARLA smoke before adding Qwen, IL,
+PPO, or Bench2Drive evaluation.
 
 The first pipeline should:
 
@@ -136,12 +158,19 @@ the dependency order below, not appended as afterthoughts.
   paired-route comparison, mean+-std reporting.
 - Cross-cutting; needed before any thesis result table is produced.
 
-### Revised High-Level Order
-M1-M3 (done) -> M4 (done: T-008..T-011, 2B provider + offline cache) ->
-**M5 (IL loop first, done)** -> **M-data scale (T-018/T-019, current)** ->
-M-mem (temporal memory as an ablation on the working IL baseline) -> M6
-(residual PPO) -> M-rep -> M-eval/M7 -> M-exp (spans M5 onward). Staleness
-augmentation (gap G8) lands with M-mem/M6 training.
+### Revised High-Level Order (re-ordered 2026-07-21)
+M1-M3 (done) -> M4 (done: T-008..T-011) -> **M5 IL (done)** ->
+**M-data scale (done: T-016..T-019)** -> **M-eval/G7 (NEXT: T-020 CARLA-free
+scoring, T-021 live scored run)** -> M-mem (temporal memory ablation) -> M6
+(residual PPO) -> M-rep -> M-exp (spans onward). Staleness augmentation (gap G8)
+lands with M-mem/M6 training.
+
+**Re-order decision (2026-07-21):** M-eval pulled BEFORE M-mem/M6. Prior order put
+eval last (M-eval/M7 after M-rep). But a temporal-memory or PPO gain is unmeasurable
+without a scored closed-loop harness, and val loss ≠ the thesis metric. Building the
+Driving-Score/Route-Completion/Infraction harness now (a) yields the first real thesis
+result from the existing IL policy, and (b) becomes the measuring stick every later
+ablation requires. M-eval merges with/expands the original M7.
 
 Reorder note (2026-07-20): M5 moved before M-mem. A memory module cannot be
 validated without a training loop, so build the feedforward IL baseline first,
@@ -160,3 +189,7 @@ Do not start large model downloads, dataset downloads, or full PPO training unti
 - 2026-07-20: M1 CARLA closed-loop smoke implemented and verified. `make carla-rollout-smoke` produced 80 metadata rows and 16 camera frames under `results/smoke_rollout/`.
 - 2026-07-20: M2 observation/action interface implemented and verified. Rollout metadata now includes stable ego, route, normalized action, control, camera, and termination schemas.
 - 2026-07-20: M3 dataset logger/manifest implemented and verified. Autopilot expert dataset smoke produced 100 records and 20 frames; validator passes.
+- 2026-07-20: M4 done (T-008..T-011). Dummy token provider → frozen Qwen3-VL-2B (peak VRAM 4.17 GB, p50 98 ms/forward) → query resampler → offline hidden-state feature cache (numeric cache-vs-live equivalence).
+- 2026-07-21: M5 IL done (T-012..T-015). Dataset loader + 64-dim obs, BC train loop (loss 0.316→0.0006 smoke), BCAgent, and two-process CARLA↔VLM policy-server bridge — learned policy drove closed-loop live. Architectural finding: CARLA (py3.7/8) + modern VLM (py3.9+) cannot share a process; cache mode cannot drive true closed-loop → bridge required.
+- 2026-07-21: M-data done (T-016..T-019). control→action unified (throttle-brake), episode-level split, multi-episode collision-free per-episode feature cache, dataset-stats QA tool, feature-cache LRU. Live scale run: 50 episode / 2000 frame (Town10HD, autopilot), **held-out val loss 0.0420→0.0100 (~4.2x) — data scale confirmed as the lever**. Pipeline is end-to-end reproducible.
+- 2026-07-21: Re-plan. Thesis-readiness review found the research is at proof-of-pipeline scale, not thesis-evidence scale: the thesis claim needs closed-loop scored metrics (G7), which do not exist. **M-eval (G7) pulled ahead of M-mem/M6** as the next milestone (T-020 CARLA-free scoring layer, T-021 live scored run).
