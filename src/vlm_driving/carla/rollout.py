@@ -28,7 +28,7 @@ from vlm_driving.carla.observations import (
     SensorFrame,
     TerminationState,
 )
-from vlm_driving.carla.route_progress import project_route_progress, route_length_m
+from vlm_driving.carla.route_progress import RouteProgressTracker, route_length_m
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,9 @@ class RolloutConfig:
     terminate_on_collision: bool = True
     blocked_speed_threshold_mps: float = 0.2
     blocked_steps_threshold: int = 80
+    route_progress_lookahead_segments: int = 25
+    route_progress_max_step_m: float = 25.0
+    route_follow_waypoint_reached_m: float = 4.0
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -244,8 +247,73 @@ def _location_distance_m(first: carla.Location, second: carla.Location) -> float
     return math.sqrt((first.x - second.x) ** 2 + (first.y - second.y) ** 2 + (first.z - second.z) ** 2)
 
 
-def _route_state(config: RolloutConfig, route_points: list[carla.Location], ego: EgoState) -> RouteState:
-    progress = project_route_progress(route_points, (ego.x, ego.y, ego.z))
+class _SequentialRouteFollower:
+    def __init__(
+        self,
+        route_points: list[carla.Location],
+        target_speed_mps: float,
+        waypoint_reached_m: float,
+    ) -> None:
+        self.route_points = route_points
+        self.target_speed_mps = target_speed_mps
+        self.waypoint_reached_m = waypoint_reached_m
+        self.target_index = 1 if len(route_points) > 1 else 0
+
+    def act(self, vehicle: carla.Vehicle) -> tuple[NormalizedAction, ControlState]:
+        location = vehicle.get_location()
+        while self.target_index < len(self.route_points) - 1:
+            if _location_distance_m(location, self.route_points[self.target_index]) > self.waypoint_reached_m:
+                break
+            self.target_index += 1
+
+        target = self.route_points[self.target_index] if self.route_points else location
+        transform = vehicle.get_transform()
+        desired_yaw = math.atan2(target.y - location.y, target.x - location.x)
+        current_yaw = math.radians(transform.rotation.yaw)
+        yaw_error = _normalize_radians(desired_yaw - current_yaw)
+        steer = _clip(yaw_error / math.radians(45.0), -1.0, 1.0)
+        speed = _speed_mps(vehicle)
+        acceleration = 0.45 if speed < self.target_speed_mps else 0.05
+        if speed > self.target_speed_mps + 1.0:
+            acceleration = -0.25
+        action = NormalizedAction(steer=steer, acceleration=acceleration)
+        control = normalized_to_control(action)
+        return action, control
+
+
+def _configure_autopilot(
+    vehicle: carla.Vehicle,
+    traffic_manager: carla.TrafficManager,
+    route_points: list[carla.Location],
+    config: RolloutConfig,
+) -> _SequentialRouteFollower | None:
+    eval_mode = not config.terminate_on_collision
+    if eval_mode and hasattr(traffic_manager, "set_path") and len(route_points) > 1:
+        vehicle.set_autopilot(True, traffic_manager.get_port())
+        traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
+        try:
+            if hasattr(traffic_manager, "auto_lane_change"):
+                traffic_manager.auto_lane_change(vehicle, False)
+            traffic_manager.set_path(vehicle, route_points[1:])
+            return None
+        except RuntimeError:
+            vehicle.set_autopilot(False, traffic_manager.get_port())
+
+    if eval_mode:
+        vehicle.set_autopilot(False, traffic_manager.get_port())
+        return _SequentialRouteFollower(
+            route_points=route_points,
+            target_speed_mps=config.target_speed_mps,
+            waypoint_reached_m=config.route_follow_waypoint_reached_m,
+        )
+
+    vehicle.set_autopilot(True, traffic_manager.get_port())
+    traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
+    return None
+
+
+def _route_state(config: RolloutConfig, tracker: RouteProgressTracker, ego: EgoState) -> RouteState:
+    progress = tracker.update((ego.x, ego.y, ego.z))
     return RouteState(
         command=config.route_command,
         target_speed_mps=config.target_speed_mps,
@@ -253,6 +321,18 @@ def _route_state(config: RolloutConfig, route_points: list[carla.Location], ego:
         route_length_m=progress.route_length_m,
         distance_to_goal_m=progress.distance_to_goal_m,
     )
+
+
+def _normalize_radians(value: float) -> float:
+    while value > math.pi:
+        value -= 2.0 * math.pi
+    while value < -math.pi:
+        value += 2.0 * math.pi
+    return value
+
+
+def _clip(value: float, lower: float, upper: float) -> float:
+    return min(upper, max(lower, float(value)))
 
 
 def _collision_event(collision_events: list[carla.CollisionEvent], processed_count: int) -> tuple[EventState, int]:
@@ -331,7 +411,9 @@ def run_rollout(config: RolloutConfig) -> Path:
     written_records: list[dict] = []
     bc_agent = None
     remote_policy = None
+    autopilot_follower = None
     route_points: list[carla.Location] = []
+    route_tracker = None
     route_length_value: float | None = None
     destination_index: int | None = None
     blocked_steps = 0
@@ -366,6 +448,11 @@ def run_rollout(config: RolloutConfig) -> Path:
             sampling_resolution_m=config.route_sampling_resolution_m,
         )
         route_length_value = route_length_m(route_points)
+        route_tracker = RouteProgressTracker(
+            route_points,
+            lookahead_segments=config.route_progress_lookahead_segments,
+            max_progress_step_m=config.route_progress_max_step_m,
+        )
 
         camera_bp = blueprint_library.find("sensor.camera.rgb")
         camera_bp.set_attribute("image_size_x", str(config.image_width))
@@ -382,8 +469,7 @@ def run_rollout(config: RolloutConfig) -> Path:
         collision_sensor.listen(collision_events.append)
 
         if config.control_mode == "autopilot":
-            vehicle.set_autopilot(True, traffic_manager.get_port())
-            traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
+            autopilot_follower = _configure_autopilot(vehicle, traffic_manager, route_points, config)
         elif config.control_mode == "bc_policy":
             bc_agent = _make_bc_agent(config)
         elif config.control_mode == "bc_remote":
@@ -409,6 +495,9 @@ def run_rollout(config: RolloutConfig) -> Path:
                     action = _safe_action(step, speed, config.target_speed_mps)
                     control = normalized_to_control(action)
                     vehicle.apply_control(control_to_carla(control))
+                elif autopilot_follower is not None:
+                    action, control = autopilot_follower.act(vehicle)
+                    vehicle.apply_control(control_to_carla(control))
 
                 frame_id = world.tick()
                 snapshot = world.get_snapshot()
@@ -427,7 +516,9 @@ def run_rollout(config: RolloutConfig) -> Path:
                     image_path = None
 
                 ego_state = _ego_state(vehicle, frame_id, snapshot.timestamp.elapsed_seconds)
-                route = _route_state(config, route_points, ego_state)
+                if route_tracker is None:
+                    raise RuntimeError("route progress tracker was not initialized")
+                route = _route_state(config, route_tracker, ego_state)
                 camera_frame = _make_camera_frame(
                     image=image,
                     image_path=image_path,
@@ -438,8 +529,9 @@ def run_rollout(config: RolloutConfig) -> Path:
 
                 policy_latency_ms = None
                 if config.control_mode == "autopilot":
-                    control = _carla_control_to_state(vehicle.get_control())
-                    action = _control_to_action(control)
+                    if autopilot_follower is None:
+                        control = _carla_control_to_state(vehicle.get_control())
+                        action = _control_to_action(control)
                     expert_control = control
                 elif config.control_mode == "bc_policy":
                     if bc_agent is None:

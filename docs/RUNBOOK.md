@@ -97,9 +97,11 @@ T-021 adds Leaderboard-style rollout logging without changing the data-collectio
 - `RolloutConfig.terminate_on_collision=True` remains the default. Dataset collection still stops on the first new collision event or `max_steps`.
 - Eval mode sets `terminate_on_collision=False`. Collisions are accumulated as discrete events and termination becomes `goal_reached`, `max_steps`, or `blocked`.
 - `route_seed` deterministically selects the spawn/destination route pair when set; when omitted it defaults to `seed` for manifest traceability.
-- `route_progress_m`, `route_length_m`, and `distance_to_goal_m` are logged from a GlobalRoutePlanner spawn-to-destination route.
+- `route_progress_m`, `route_length_m`, and `distance_to_goal_m` are logged from a GlobalRoutePlanner spawn-to-destination route with a forward-only `RouteProgressTracker`; progress starts near zero at spawn and never decreases across rollout steps.
 - `collision_event_count` and `collision_new` mark only new collision events on each step; latched collision state is not counted repeatedly.
 - `policy.latency_ms` is logged around `policy.act` for `bc_policy` and `bc_remote`.
+- Eval-mode `control_mode="autopilot"` asks the Traffic Manager to follow the planned route via `set_path`; if that API is unavailable or rejected, the rollout falls back to a simple sequential waypoint follower. Dataset collection keeps the old Traffic Manager behavior because `terminate_on_collision=True` remains the default.
+- BC policies are not goal-conditioned in this task; their Route Completion remains an evaluation of how well the local driving policy happens to stay on the planned route.
 
 Dry checks before a live eval run:
 
