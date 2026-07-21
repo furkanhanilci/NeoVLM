@@ -25,6 +25,9 @@ class DatasetManifest:
     route_command: str
     target_speed_mps: float
     weather_preset: str | None = None
+    route_length_m: float | None = None
+    route_seed: int | None = None
+    destination_spawn_index: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

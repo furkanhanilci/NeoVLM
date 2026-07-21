@@ -19,6 +19,8 @@ TerminationReason = Literal[
     "running",
     "max_steps",
     "collision",
+    "goal_reached",
+    "blocked",
     "off_route",
     "sensor_timeout",
     "manual_stop",
@@ -63,6 +65,7 @@ class RouteState:
     command: RouteCommand
     target_speed_mps: float
     route_progress_m: float | None = None
+    route_length_m: float | None = None
     distance_to_goal_m: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -135,8 +138,12 @@ def _to_float(value: Any) -> float:
 @dataclass(frozen=True)
 class EventState:
     collision: bool = False
+    collision_new: bool = False
+    collision_event_count: int = 0
     collision_actor_type: str | None = None
     collision_impulse: float | None = None
+    red_light: bool | None = None
+    outside_route_lanes: float | bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -156,6 +163,7 @@ class PolicyState:
     name: str
     control_mode: ControlMode
     is_expert: bool
+    latency_ms: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

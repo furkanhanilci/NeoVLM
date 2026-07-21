@@ -18,14 +18,23 @@ def _record(
     progress: float | None,
     distance: float | None,
     collision: bool = False,
+    collision_new: bool | None = None,
+    collision_event_count: int | None = None,
     collision_actor_type: str | None = None,
     red_light: bool | None = None,
+    outside_route_lanes: float | bool | None = None,
     latency_ms: float | None = None,
     acceleration: float = 0.0,
 ) -> dict:
     events = {"collision": collision, "collision_actor_type": collision_actor_type}
+    if collision_new is not None:
+        events["collision_new"] = collision_new
+    if collision_event_count is not None:
+        events["collision_event_count"] = collision_event_count
     if red_light is not None:
         events["red_light"] = red_light
+    if outside_route_lanes is not None:
+        events["outside_route_lanes"] = outside_route_lanes
     return {
         "episode_id": "episode_eval",
         "step": step,
@@ -93,6 +102,94 @@ def test_missing_infraction_event_logging_is_na_not_zero():
     assert lane["count"] is None
     assert "red_light" in score["driving_score"]["missing_event_logging"]
     assert score["driving_score"]["leaderboard_comparable"] is False
+
+
+def test_none_event_fields_do_not_mask_missing_logging():
+    record = _record(0, progress=10.0, distance=90.0)
+    record["events"]["red_light"] = None
+    record["events"]["outside_route_lanes"] = None
+
+    score = score_episode([record])
+
+    assert score["infractions"]["by_type"]["red_light"]["status"] == "not_available"
+    assert score["infractions"]["by_type"]["outside_route_lanes"]["status"] == "not_available"
+    assert "red_light" in score["driving_score"]["missing_event_logging"]
+    assert "outside_route_lanes" in score["driving_score"]["missing_event_logging"]
+
+
+def test_collision_dedup_prefers_new_event_count_over_latched_collision_flag():
+    records = [
+        _record(
+            0,
+            progress=0.0,
+            distance=20.0,
+            collision=True,
+            collision_new=True,
+            collision_event_count=1,
+            collision_actor_type="vehicle.audi.tt",
+        ),
+        _record(
+            1,
+            progress=5.0,
+            distance=15.0,
+            collision=True,
+            collision_new=False,
+            collision_event_count=0,
+            collision_actor_type="vehicle.audi.tt",
+        ),
+        _record(
+            2,
+            progress=10.0,
+            distance=10.0,
+            collision=True,
+            collision_new=False,
+            collision_event_count=0,
+            collision_actor_type="vehicle.audi.tt",
+        ),
+    ]
+
+    score = score_episode(records)
+
+    assert score["basic"]["collision_count"] == 1
+    assert score["infractions"]["collision_count"] == 1
+    assert score["infractions"]["by_type"]["collisions_vehicle"]["count"] == 1
+    assert score["infraction_penalty"]["applied"][0]["count"] == 1
+
+
+def test_collision_event_count_allows_multiple_discrete_events_in_one_step():
+    records = [
+        _record(
+            0,
+            progress=0.0,
+            distance=20.0,
+            collision=True,
+            collision_event_count=2,
+            collision_actor_type="static.prop",
+        )
+    ]
+
+    score = score_episode(records)
+
+    assert score["basic"]["collision_count"] == 2
+    assert score["infractions"]["collision_count"] == 2
+    assert score["infractions"]["by_type"]["collisions_layout"]["count"] == 2
+
+
+def test_new_red_light_and_outside_route_lane_fields_are_available_counts():
+    records = [
+        _record(0, progress=0.0, distance=100.0, red_light=False, outside_route_lanes=0.0),
+        _record(1, progress=50.0, distance=50.0, red_light=True, outside_route_lanes=25.0),
+    ]
+
+    score = score_episode(records)
+
+    assert score["infractions"]["by_type"]["red_light"]["status"] == "available"
+    assert score["infractions"]["by_type"]["red_light"]["count"] == 1
+    assert score["infractions"]["by_type"]["outside_route_lanes"]["status"] == "available"
+    assert score["infractions"]["by_type"]["outside_route_lanes"]["count"] == 1
+    assert score["infractions"]["by_type"]["outside_route_lanes"]["percentage"] == 25.0
+    assert "red_light" not in score["driving_score"]["missing_event_logging"]
+    assert "outside_route_lanes" not in score["driving_score"]["missing_event_logging"]
 
 
 def test_route_completion_and_driving_score_are_unavailable_without_route_progress():

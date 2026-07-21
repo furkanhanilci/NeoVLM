@@ -45,6 +45,7 @@ Use `make carla-window` instead of `make carla-start` when a visible CARLA windo
 | `make carla-dataset-smoke` | `scripts/run_carla_dataset_smoke.sh` | `micromamba run -n carla` | Runs the IL dataset smoke path. |
 | `make carla-dataset-collect` | `scripts/run_carla_dataset_collect.sh` | `carla` collection + `vlm` split manifest | Collects multiple autopilot episodes and writes `split_manifest.json`; T-019 live scale run uses this path. |
 | `make dataset-stats` | `scripts/run_dataset_stats.sh` | `micromamba run -n vlm` | Summarizes dataset QA before spending GPU time on feature cache. |
+| `make eval-report` | `scripts/run_eval_report.sh` | `micromamba run -n vlm` | Scores saved rollout directories with the CARLA-free eval metrics layer. |
 | `make bc-smoke` | `scripts/run_bc_smoke.sh` | `micromamba run -n vlm` | Trains the tiny BC policy on the cached feature smoke set and writes `results/bc_smoke/bc_checkpoint.pt`. |
 | `make feature-cache-dataset` | `scripts/build_feature_cache_dataset.sh` | `micromamba run -n vlm` + CUDA | Builds per-episode frozen-Qwen caches for `results/datasets/carla_il_collect/`. |
 | `make bc-train` | `scripts/run_bc_train.sh` | `micromamba run -n vlm` | Trains BC on the train split and reports validation loss. |
@@ -84,9 +85,40 @@ Useful overrides:
 BC_BRIDGE_FRAMES=20 make bc-bridge-smoke
 BC_BRIDGE_IMAGE_WIDTH=320 BC_BRIDGE_IMAGE_HEIGHT=180 make bc-bridge-smoke
 POLICY_SERVER_PORT=8877 BC_CHECKPOINT=results/bc_smoke/bc_checkpoint.pt make bc-bridge-smoke
+BC_BRIDGE_TERMINATE_ON_COLLISION=1 make bc-bridge-smoke
 ```
 
 Outputs are written to `results/bc_bridge_smoke/`, with policy-server logs in `setup_logs/policy_server.log` and client smoke logs in `setup_logs/bc_bridge_smoke.log`. On 8 GB GPUs, offscreen CARLA and Qwen may not fit at the same time; use `POLICY_SERVER_DEVICE=cpu` for a slower integration-only check or install a supported 4-bit stack before expecting GPU live rollout.
+
+## Eval Mode Logging
+
+T-021 adds Leaderboard-style rollout logging without changing the data-collection default:
+
+- `RolloutConfig.terminate_on_collision=True` remains the default. Dataset collection still stops on the first new collision event or `max_steps`.
+- Eval mode sets `terminate_on_collision=False`. Collisions are accumulated as discrete events and termination becomes `goal_reached`, `max_steps`, or `blocked`.
+- `route_seed` deterministically selects the spawn/destination route pair when set; when omitted it defaults to `seed` for manifest traceability.
+- `route_progress_m`, `route_length_m`, and `distance_to_goal_m` are logged from a GlobalRoutePlanner spawn-to-destination route.
+- `collision_event_count` and `collision_new` mark only new collision events on each step; latched collision state is not counted repeatedly.
+- `policy.latency_ms` is logged around `policy.act` for `bc_policy` and `bc_remote`.
+
+Dry checks before a live eval run:
+
+```bash
+bash -n scripts/run_bc_bridge_smoke.sh
+PYTHONPATH="src:third_party/CARLA_0.9.15/PythonAPI/carla" micromamba run -n carla python -c "from vlm_driving.carla import RolloutConfig; print(RolloutConfig().terminate_on_collision)"
+micromamba run -n vlm pytest tests/test_eval_metrics.py tests/test_route_progress.py -q
+```
+
+T-022 live scoring flow, with CARLA already running:
+
+```bash
+make carla-status
+BC_BRIDGE_TERMINATE_ON_COLLISION=0 make bc-bridge-smoke
+make eval-report
+cat results/eval_report/eval_report.txt
+```
+
+Traffic-light and lane-invasion logging remain T-022/live-validation items unless their event fields are explicitly present in rollout metadata. Stop sign, scenario timeout, yield, and min-speed remain `N/A - event logging required`.
 
 ## Dataset Collection
 
@@ -179,6 +211,9 @@ The manifest uses `schema_version: carla_rollout_v1` and records run-level metad
 | `route_command` | Route command label, e.g. `lane_follow`. |
 | `target_speed_mps` | Target speed in meters per second. |
 | `weather_preset` | CARLA weather preset used by the run when set. |
+| `route_length_m` | Planned GlobalRoutePlanner route length in meters. |
+| `route_seed` | Seed used for deterministic route selection. |
+| `destination_spawn_index` | Spawn-point index used as the destination. |
 
 ## `metadata.jsonl`
 
@@ -190,13 +225,13 @@ Each line is one `RolloutRecord` serialized as JSON. Top-level fields:
 | `step` | Zero-based rollout step. |
 | `carla_frame` | CARLA simulator frame id. |
 | `ego` | Ego pose, speed, acceleration, angular velocity, and timestamp. |
-| `route` | Route command, target speed, optional progress/distance fields. |
+| `route` | Route command, target speed, route length, progress, and distance-to-goal fields. |
 | `action` | Normalized policy action: `steer` and `acceleration`, clipped to `[-1, 1]`. |
 | `control` | CARLA control command: throttle, steer, brake, hand brake, reverse. |
 | `camera` | RGB sensor metadata and relative saved frame path when saved. |
-| `termination` | `done` flag and reason (`running`, `max_steps`, `collision`, `off_route`, `sensor_timeout`, `manual_stop`). |
-| `policy` | Policy name, control mode, and whether it is expert/autopilot. |
-| `events` | Collision state and optional collision actor/impulse. |
+| `termination` | `done` flag and reason (`running`, `max_steps`, `collision`, `goal_reached`, `blocked`, `off_route`, `sensor_timeout`, `manual_stop`). |
+| `policy` | Policy name, control mode, expert/autopilot flag, and optional `latency_ms`. |
+| `events` | Collision event state, `collision_new`, `collision_event_count`, and optional collision actor/impulse or future traffic/lane events. |
 | `expert_control` | Expert CARLA control when available; `null` for the rule-based smoke rollout. |
 
 Inspect the first row with:

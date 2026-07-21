@@ -6,3 +6,4 @@ def test_carla_rollout_import_is_marked():
     from vlm_driving.carla.rollout import RolloutConfig
 
     assert RolloutConfig().port == 2000
+    assert RolloutConfig().terminate_on_collision is True

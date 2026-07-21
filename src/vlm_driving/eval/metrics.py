@@ -79,7 +79,7 @@ def summarize_rollout_metrics(records: Sequence[dict[str, Any]]) -> dict[str, An
         "duration_s": duration_s,
         "distance_m": distance_m,
         "mean_speed_mps": _mean(_float(item.get("speed_mps")) for item in ego),
-        "collision_count": sum(1 for item in events if bool(item.get("collision", False))),
+        "collision_count": sum(_collision_event_count(item) for item in events),
         "termination_reason": str(termination.get("reason", "unknown")),
         "mean_abs_steer": _mean(abs(_float(item.get("steer"))) for item in actions),
         "mean_throttle": _mean(_float(item.get("throttle")) for item in controls),
@@ -323,7 +323,7 @@ def _route_completion(records: Sequence[dict[str, Any]], manifest: dict[str, Any
         }
 
     termination_reason = str(_dict(records[-1].get("termination")).get("reason", "")) if records else ""
-    if termination_reason in {"route_completed", "success", "completed"}:
+    if termination_reason in {"route_completed", "success", "completed", "goal_reached"}:
         return {
             "value_pct": 100.0,
             "status": "available",
@@ -348,18 +348,19 @@ def _infraction_breakdown(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "collisions_vehicle": 0,
         "collisions_layout": 0,
     }
-    has_collision_logging = any("collision" in _dict(record.get("events")) for record in records)
+    has_collision_logging = any(_has_collision_logging(_dict(record.get("events"))) for record in records)
 
     for record in records:
         events = _dict(record.get("events"))
-        if not bool(events.get("collision", False)):
+        event_count = _collision_event_count(events)
+        if event_count <= 0:
             continue
-        collision_count += 1
+        collision_count += event_count
         collision_name = _collision_infraction_name(events.get("collision_actor_type"))
         if collision_name is None:
-            unknown_collision_count += 1
+            unknown_collision_count += event_count
         else:
-            collision_type_counts[collision_name] += 1
+            collision_type_counts[collision_name] += event_count
 
     for name, count in collision_type_counts.items():
         by_type[name] = _available_infraction(
@@ -564,6 +565,19 @@ def _collision_infraction_name(actor_type: Any) -> str | None:
     return "collisions_layout"
 
 
+def _has_collision_logging(events: dict[str, Any]) -> bool:
+    return any(key in events for key in ("collision_event_count", "collision_new", "collision"))
+
+
+def _collision_event_count(events: dict[str, Any]) -> int:
+    explicit_count = _optional_float(events.get("collision_event_count"))
+    if explicit_count is not None:
+        return max(0, int(explicit_count))
+    if "collision_new" in events:
+        return 1 if _is_truthy_infraction(events.get("collision_new")) else 0
+    return 1 if _is_truthy_infraction(events.get("collision")) else 0
+
+
 def _available_infraction(count: int | None, penalty: float, status: str, note: str | None) -> dict[str, Any]:
     return {"count": count, "status": status, "penalty_coefficient": penalty, "note": note}
 
@@ -576,8 +590,10 @@ def _count_explicit_infraction(records: Sequence[dict[str, Any]], name: str) -> 
         events = _dict(record.get("events"))
         for alias in aliases:
             if alias in events:
-                seen = True
                 value = events[alias]
+                if value is None:
+                    continue
+                seen = True
                 if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, dict)):
                     count += len(value)
                 elif _is_truthy_infraction(value):
@@ -591,7 +607,7 @@ def _percent_infraction_value(records: Sequence[dict[str, Any]], name: str) -> f
     for record in records:
         events = _dict(record.get("events"))
         for alias in aliases:
-            if alias in events:
+            if alias in events and events[alias] is not None:
                 values.append(_float(events[alias]))
     if not values:
         return None
@@ -602,7 +618,7 @@ def _route_timeout_count(records: Sequence[dict[str, Any]]) -> int:
     if not records:
         return 0
     reason = str(_dict(records[-1].get("termination")).get("reason", "")).lower()
-    return 1 if reason in {"timeout", "route_timeout"} else 0
+    return 1 if reason in {"timeout", "route_timeout", "max_steps"} else 0
 
 
 def _latency_ms(record: dict[str, Any]) -> float | None:

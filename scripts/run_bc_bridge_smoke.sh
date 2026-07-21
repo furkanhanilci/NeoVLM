@@ -9,6 +9,7 @@ HOST="${POLICY_SERVER_HOST:-127.0.0.1}"
 FRAMES="${BC_BRIDGE_FRAMES:-40}"
 IMAGE_WIDTH="${BC_BRIDGE_IMAGE_WIDTH:-800}"
 IMAGE_HEIGHT="${BC_BRIDGE_IMAGE_HEIGHT:-450}"
+TERMINATE_ON_COLLISION="${BC_BRIDGE_TERMINATE_ON_COLLISION:-0}"
 mkdir -p "$LOG_DIR"
 export PYTHONPATH="$ROOT/src:$ROOT/third_party/CARLA_0.9.15/PythonAPI/carla${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -75,6 +76,7 @@ output_dir = run_rollout(
         target_speed_mps=6.0,
         policy_server_host=host,
         policy_server_port=port,
+        terminate_on_collision="$TERMINATE_ON_COLLISION".strip().lower() in {"1", "true", "yes", "on"},
     )
 )
 print(f"bc bridge smoke ok: {output_dir}")

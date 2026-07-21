@@ -28,6 +28,7 @@ from vlm_driving.carla.observations import (
     SensorFrame,
     TerminationState,
 )
+from vlm_driving.carla.route_progress import project_route_progress, route_length_m
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,13 @@ class RolloutConfig:
     policy_server_port: int = 8765
     policy_server_timeout_s: float = 60.0
     weather_preset: str | None = None
+    route_seed: int | None = None
+    destination_spawn_index: int | None = None
+    route_sampling_resolution_m: float = 2.0
+    goal_distance_threshold_m: float = 5.0
+    terminate_on_collision: bool = True
+    blocked_speed_threshold_mps: float = 0.2
+    blocked_steps_threshold: int = 80
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -111,11 +119,41 @@ def _carla_control_to_state(control: carla.VehicleControl) -> ControlState:
     )
 
 
-def _choose_spawn_point(world: carla.World, rng: random.Random) -> carla.Transform:
+def _choose_route_transforms(
+    world: carla.World,
+    spawn_rng: random.Random,
+    destination_rng: random.Random,
+    destination_spawn_index: int | None,
+) -> tuple[carla.Transform, carla.Transform, int]:
     spawn_points = world.get_map().get_spawn_points()
     if not spawn_points:
         raise RuntimeError("CARLA map has no spawn points")
-    return rng.choice(spawn_points)
+    spawn_index = spawn_rng.randrange(len(spawn_points))
+    spawn_transform = spawn_points[spawn_index]
+    if destination_spawn_index is not None:
+        destination_index = destination_spawn_index % len(spawn_points)
+        return spawn_transform, spawn_points[destination_index], destination_index
+
+    far_candidates = [
+        index
+        for index, transform in enumerate(spawn_points)
+        if index != spawn_index and _transform_distance_m(spawn_transform, transform) >= 20.0
+    ]
+    candidates = far_candidates or [index for index in range(len(spawn_points)) if index != spawn_index]
+    if not candidates:
+        return spawn_transform, spawn_transform, spawn_index
+    destination_index = destination_rng.choice(candidates)
+    return spawn_transform, spawn_points[destination_index], destination_index
+
+
+def _transform_distance_m(first: carla.Transform, second: carla.Transform) -> float:
+    first_location = first.location
+    second_location = second.location
+    return math.sqrt(
+        (first_location.x - second_location.x) ** 2
+        + (first_location.y - second_location.y) ** 2
+        + (first_location.z - second_location.z) ** 2
+    )
 
 
 def _weather_preset(name: str) -> carla.WeatherParameters:
@@ -174,17 +212,83 @@ def _make_bc_agent(config: RolloutConfig):
     )
 
 
-def _collision_event(collision_events: list[carla.CollisionEvent]) -> EventState:
-    if not collision_events:
-        return EventState()
-    event = collision_events[-1]
+def _plan_route_points(
+    world_map: carla.Map,
+    origin: carla.Location,
+    destination: carla.Location,
+    sampling_resolution_m: float,
+) -> list[carla.Location]:
+    from agents.navigation.global_route_planner import GlobalRoutePlanner
+
+    if sampling_resolution_m <= 0.0:
+        raise ValueError("route_sampling_resolution_m must be positive")
+    if _location_distance_m(origin, destination) <= 1e-3:
+        return [origin, destination]
+    planner = GlobalRoutePlanner(world_map, sampling_resolution_m)
+    route_trace = planner.trace_route(origin, destination)
+    points = [origin]
+    points.extend(waypoint.transform.location for waypoint, _road_option in route_trace)
+    points.append(destination)
+    return _dedupe_route_points(points)
+
+
+def _dedupe_route_points(points: list[carla.Location]) -> list[carla.Location]:
+    deduped: list[carla.Location] = []
+    for point in points:
+        if not deduped or _location_distance_m(point, deduped[-1]) > 1e-3:
+            deduped.append(point)
+    return deduped
+
+
+def _location_distance_m(first: carla.Location, second: carla.Location) -> float:
+    return math.sqrt((first.x - second.x) ** 2 + (first.y - second.y) ** 2 + (first.z - second.z) ** 2)
+
+
+def _route_state(config: RolloutConfig, route_points: list[carla.Location], ego: EgoState) -> RouteState:
+    progress = project_route_progress(route_points, (ego.x, ego.y, ego.z))
+    return RouteState(
+        command=config.route_command,
+        target_speed_mps=config.target_speed_mps,
+        route_progress_m=progress.route_progress_m,
+        route_length_m=progress.route_length_m,
+        distance_to_goal_m=progress.distance_to_goal_m,
+    )
+
+
+def _collision_event(collision_events: list[carla.CollisionEvent], processed_count: int) -> tuple[EventState, int]:
+    new_events = collision_events[processed_count:]
+    if not new_events:
+        return EventState(), len(collision_events)
+    event = new_events[-1]
     impulse = event.normal_impulse
     magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
     return EventState(
         collision=True,
+        collision_new=True,
+        collision_event_count=len(new_events),
         collision_actor_type=event.other_actor.type_id if event.other_actor else None,
         collision_impulse=magnitude,
-    )
+    ), len(collision_events)
+
+
+def _termination_state(
+    config: RolloutConfig,
+    events: EventState,
+    route: RouteState,
+    blocked_steps: int,
+    is_last_step: bool,
+) -> TerminationState:
+    if config.terminate_on_collision and events.collision_event_count > 0:
+        return TerminationState(done=True, reason="collision")
+
+    eval_mode = not config.terminate_on_collision
+    if eval_mode and route.distance_to_goal_m is not None and route.distance_to_goal_m <= config.goal_distance_threshold_m:
+        return TerminationState(done=True, reason="goal_reached")
+    if eval_mode and blocked_steps >= config.blocked_steps_threshold:
+        return TerminationState(done=True, reason="blocked")
+    if is_last_step:
+        return TerminationState(done=True, reason="max_steps")
+    return TerminationState(done=False, reason="running")
 
 
 def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
@@ -195,13 +299,22 @@ def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
 
 def run_rollout(config: RolloutConfig) -> Path:
     rng = random.Random(config.seed)
+    effective_route_seed = config.route_seed if config.route_seed is not None else config.seed
+    if config.route_seed is None:
+        spawn_rng = rng
+        destination_rng = random.Random(effective_route_seed)
+    else:
+        route_rng = random.Random(effective_route_seed)
+        spawn_rng = route_rng
+        destination_rng = route_rng
     output_dir = config.output_dir
     _prepare_output_dir(output_dir, config.overwrite)
 
     client = carla.Client(config.host, config.port)
     client.set_timeout(config.timeout_s)
     world = client.get_world()
-    map_name = world.get_map().name
+    world_map = world.get_map()
+    map_name = world_map.name
     original_settings = world.get_settings()
     original_weather = world.get_weather()
     traffic_manager = client.get_trafficmanager(config.traffic_manager_port)
@@ -212,11 +325,16 @@ def run_rollout(config: RolloutConfig) -> Path:
     actors: list[carla.Actor] = []
     image_queue: queue.Queue[carla.Image] = queue.Queue(maxsize=8)
     collision_events: list[carla.CollisionEvent] = []
+    processed_collision_count = 0
     saved_frames = 0
     completed_steps = 0
     written_records: list[dict] = []
     bc_agent = None
     remote_policy = None
+    route_points: list[carla.Location] = []
+    route_length_value: float | None = None
+    destination_index: int | None = None
+    blocked_steps = 0
 
     try:
         if config.weather_preset is not None:
@@ -231,10 +349,23 @@ def run_rollout(config: RolloutConfig) -> Path:
 
         blueprint_library = world.get_blueprint_library()
         vehicle_bp = rng.choice(blueprint_library.filter("vehicle.tesla.model3"))
-        vehicle = world.try_spawn_actor(vehicle_bp, _choose_spawn_point(world, rng))
+        spawn_transform, destination_transform, destination_index = _choose_route_transforms(
+            world,
+            spawn_rng=spawn_rng,
+            destination_rng=destination_rng,
+            destination_spawn_index=config.destination_spawn_index,
+        )
+        vehicle = world.try_spawn_actor(vehicle_bp, spawn_transform)
         if vehicle is None:
             raise RuntimeError("Failed to spawn ego vehicle")
         actors.append(vehicle)
+        route_points = _plan_route_points(
+            world_map,
+            origin=vehicle.get_location(),
+            destination=destination_transform.location,
+            sampling_resolution_m=config.route_sampling_resolution_m,
+        )
+        route_length_value = route_length_m(route_points)
 
         camera_bp = blueprint_library.find("sensor.camera.rgb")
         camera_bp.set_attribute("image_size_x", str(config.image_width))
@@ -265,20 +396,11 @@ def run_rollout(config: RolloutConfig) -> Path:
             ).connect()
             remote_policy.reset()
 
-        route = RouteState(
-            command=config.route_command,
-            target_speed_mps=config.target_speed_mps,
-        )
         policy_name = {
             "autopilot": "carla_autopilot",
             "bc_policy": "bc_il",
             "bc_remote": "bc_remote_il",
         }.get(config.control_mode, "rule_based_smoke")
-        policy = PolicyState(
-            name=policy_name,
-            control_mode=config.control_mode,
-            is_expert=config.control_mode == "autopilot",
-        )
 
         with JsonlRolloutLogger(output_dir) as logger:
             for step in range(config.frames):
@@ -305,6 +427,7 @@ def run_rollout(config: RolloutConfig) -> Path:
                     image_path = None
 
                 ego_state = _ego_state(vehicle, frame_id, snapshot.timestamp.elapsed_seconds)
+                route = _route_state(config, route_points, ego_state)
                 camera_frame = _make_camera_frame(
                     image=image,
                     image_path=image_path,
@@ -313,6 +436,7 @@ def run_rollout(config: RolloutConfig) -> Path:
                     height=config.image_height,
                 )
 
+                policy_latency_ms = None
                 if config.control_mode == "autopilot":
                     control = _carla_control_to_state(vehicle.get_control())
                     action = _control_to_action(control)
@@ -326,7 +450,9 @@ def run_rollout(config: RolloutConfig) -> Path:
                         "camera": camera_frame.to_dict(),
                     }
                     live_image = _carla_image_to_pil(image) if image is not None else None
+                    policy_start_s = time.perf_counter()
                     action = bc_agent.act(agent_record, image=live_image)
+                    policy_latency_ms = (time.perf_counter() - policy_start_s) * 1000.0
                     control = normalized_to_control(action)
                     vehicle.apply_control(control_to_carla(control))
                     expert_control = None
@@ -340,18 +466,33 @@ def run_rollout(config: RolloutConfig) -> Path:
                         "route": route.to_dict(),
                         "camera": camera_frame.to_dict(),
                     }
+                    policy_start_s = time.perf_counter()
                     action = remote_policy.act(agent_record, output_dir / camera_frame.path)
+                    policy_latency_ms = (time.perf_counter() - policy_start_s) * 1000.0
                     control = normalized_to_control(action)
                     vehicle.apply_control(control_to_carla(control))
                     expert_control = None
                 else:
                     expert_control = None
 
-                events = _collision_event(collision_events)
+                events, processed_collision_count = _collision_event(collision_events, processed_collision_count)
+                if ego_state.speed_mps <= config.blocked_speed_threshold_mps:
+                    blocked_steps += 1
+                else:
+                    blocked_steps = 0
                 is_last_step = step == config.frames - 1
-                termination = TerminationState(
-                    done=events.collision or is_last_step,
-                    reason="collision" if events.collision else ("max_steps" if is_last_step else "running"),
+                termination = _termination_state(
+                    config=config,
+                    events=events,
+                    route=route,
+                    blocked_steps=blocked_steps,
+                    is_last_step=is_last_step,
+                )
+                policy = PolicyState(
+                    name=policy_name,
+                    control_mode=config.control_mode,
+                    is_expert=config.control_mode == "autopilot",
+                    latency_ms=policy_latency_ms,
                 )
                 record = RolloutRecord(
                     episode_id=config.episode_id,
@@ -391,6 +532,9 @@ def run_rollout(config: RolloutConfig) -> Path:
                     route_command=config.route_command,
                     target_speed_mps=config.target_speed_mps,
                     weather_preset=config.weather_preset,
+                    route_length_m=route_length_value,
+                    route_seed=effective_route_seed,
+                    destination_spawn_index=destination_index,
                 )
             )
             write_rollout_metrics(output_dir / "metrics.json", written_records)
