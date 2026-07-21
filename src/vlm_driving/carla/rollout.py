@@ -69,7 +69,6 @@ class RolloutConfig:
     blocked_steps_threshold: int = 80
     route_progress_lookahead_segments: int = 25
     route_progress_max_step_m: float = 25.0
-    route_follow_waypoint_reached_m: float = 4.0
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -247,54 +246,35 @@ def _location_distance_m(first: carla.Location, second: carla.Location) -> float
     return math.sqrt((first.x - second.x) ** 2 + (first.y - second.y) ** 2 + (first.z - second.z) ** 2)
 
 
-class _SequentialRouteFollower:
+class _BasicAgentRouteFollower:
     def __init__(
         self,
-        route_points: list[carla.Location],
+        vehicle: carla.Vehicle,
+        destination: carla.Location,
         target_speed_mps: float,
-        waypoint_reached_m: float,
     ) -> None:
-        self.route_points = route_points
-        self.target_speed_mps = target_speed_mps
-        self.waypoint_reached_m = waypoint_reached_m
-        self.target_index = 1 if len(route_points) > 1 else 0
+        from agents.navigation.basic_agent import BasicAgent
 
-    def act(self, vehicle: carla.Vehicle) -> tuple[NormalizedAction, ControlState]:
-        location = vehicle.get_location()
-        while self.target_index < len(self.route_points) - 1:
-            if _location_distance_m(location, self.route_points[self.target_index]) > self.waypoint_reached_m:
-                break
-            self.target_index += 1
+        self.agent = BasicAgent(vehicle, target_speed=target_speed_mps * 3.6)
+        self.agent.set_destination(destination)
 
-        target = self.route_points[self.target_index] if self.route_points else location
-        transform = vehicle.get_transform()
-        desired_yaw = math.atan2(target.y - location.y, target.x - location.x)
-        current_yaw = math.radians(transform.rotation.yaw)
-        yaw_error = _normalize_radians(desired_yaw - current_yaw)
-        steer = _clip(yaw_error / math.radians(45.0), -1.0, 1.0)
-        speed = _speed_mps(vehicle)
-        acceleration = 0.45 if speed < self.target_speed_mps else 0.05
-        if speed > self.target_speed_mps + 1.0:
-            acceleration = -0.25
-        action = NormalizedAction(steer=steer, acceleration=acceleration)
-        control = normalized_to_control(action)
+    def act(self, _vehicle: carla.Vehicle) -> tuple[NormalizedAction, ControlState]:
+        carla_control = self.agent.run_step()
+        control = _carla_control_to_state(carla_control)
+        action = _control_to_action(control)
         return action, control
 
 
 def _configure_autopilot(
     vehicle: carla.Vehicle,
     traffic_manager: carla.TrafficManager,
-    route_points: list[carla.Location],
+    destination: carla.Location,
     config: RolloutConfig,
-) -> _SequentialRouteFollower | None:
+) -> _BasicAgentRouteFollower | None:
     eval_mode = not config.terminate_on_collision
     if eval_mode:
         vehicle.set_autopilot(False, traffic_manager.get_port())
-        return _SequentialRouteFollower(
-            route_points=route_points,
-            target_speed_mps=config.target_speed_mps,
-            waypoint_reached_m=config.route_follow_waypoint_reached_m,
-        )
+        return _BasicAgentRouteFollower(vehicle, destination, config.target_speed_mps)
 
     vehicle.set_autopilot(True, traffic_manager.get_port())
     traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
@@ -310,18 +290,6 @@ def _route_state(config: RolloutConfig, tracker: RouteProgressTracker, ego: EgoS
         route_length_m=progress.route_length_m,
         distance_to_goal_m=progress.distance_to_goal_m,
     )
-
-
-def _normalize_radians(value: float) -> float:
-    while value > math.pi:
-        value -= 2.0 * math.pi
-    while value < -math.pi:
-        value += 2.0 * math.pi
-    return value
-
-
-def _clip(value: float, lower: float, upper: float) -> float:
-    return min(upper, max(lower, float(value)))
 
 
 def _collision_event(collision_events: list[carla.CollisionEvent], processed_count: int) -> tuple[EventState, int]:
@@ -458,7 +426,12 @@ def run_rollout(config: RolloutConfig) -> Path:
         collision_sensor.listen(collision_events.append)
 
         if config.control_mode == "autopilot":
-            autopilot_follower = _configure_autopilot(vehicle, traffic_manager, route_points, config)
+            autopilot_follower = _configure_autopilot(
+                vehicle,
+                traffic_manager,
+                destination_transform.location,
+                config,
+            )
         elif config.control_mode == "bc_policy":
             bc_agent = _make_bc_agent(config)
         elif config.control_mode == "bc_remote":
