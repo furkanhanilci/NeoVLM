@@ -28,6 +28,27 @@ class _VehicleControl:
         self.reverse = reverse
 
 
+class _Vector:
+    def __init__(self, x: float = 1.0, y: float = 0.0, z: float = 0.0) -> None:
+        self.x = x
+        self.y = y
+        self.z = z
+
+
+class _Actor:
+    def __init__(self, actor_id: int | None, type_id: str) -> None:
+        if actor_id is not None:
+            self.id = actor_id
+        self.type_id = type_id
+
+
+class _CollisionEvent:
+    def __init__(self, frame: int, actor: _Actor | None, impulse: _Vector | None = None) -> None:
+        self.frame = frame
+        self.other_actor = actor
+        self.normal_impulse = impulse if impulse is not None else _Vector()
+
+
 class _Vehicle:
     def __init__(self) -> None:
         self.autopilot_calls: list[tuple[bool, int]] = []
@@ -142,3 +163,95 @@ def test_data_collection_autopilot_path_keeps_tm_autopilot_on(monkeypatch):
     assert traffic_manager.speed_calls == [(vehicle, 35.0)]
     assert traffic_manager.set_path_calls == []
     assert basic_agent.instances == []
+
+
+def test_collision_contact_episode_dedup_counts_continuous_actor_once(monkeypatch):
+    rollout, _basic_agent = _load_rollout_with_fake_carla(monkeypatch)
+    dedup_state = rollout._CollisionDedupState(cooldown_frames=20)
+    actor = _Actor(actor_id=7, type_id="static.car")
+    collision_events = []
+    processed_count = 0
+    counted_events = 0
+
+    for frame in range(100):
+        collision_events.append(_CollisionEvent(frame=frame, actor=actor))
+        event_state, processed_count = rollout._collision_event(
+            collision_events,
+            processed_count,
+            dedup_state=dedup_state,
+            current_frame=frame,
+        )
+        counted_events += event_state.collision_event_count
+
+    assert processed_count == 100
+    assert counted_events == 1
+    assert event_state.collision is True
+    assert event_state.collision_new is False
+    assert event_state.collision_event_count == 0
+    assert event_state.collision_actor_type == "static.car"
+
+
+def test_collision_contact_episode_dedup_counts_different_actors(monkeypatch):
+    rollout, _basic_agent = _load_rollout_with_fake_carla(monkeypatch)
+    dedup_state = rollout._CollisionDedupState(cooldown_frames=20)
+    collision_events = [
+        _CollisionEvent(frame=5, actor=_Actor(actor_id=7, type_id="static.car")),
+        _CollisionEvent(frame=5, actor=_Actor(actor_id=8, type_id="static.trafficsign")),
+    ]
+
+    event_state, processed_count = rollout._collision_event(
+        collision_events,
+        processed_count=0,
+        dedup_state=dedup_state,
+        current_frame=5,
+    )
+
+    assert processed_count == 2
+    assert event_state.collision is True
+    assert event_state.collision_new is True
+    assert event_state.collision_event_count == 2
+    assert event_state.collision_actor_type == "static.trafficsign"
+
+
+def test_collision_contact_episode_dedup_counts_same_actor_after_cooldown_gap(monkeypatch):
+    rollout, _basic_agent = _load_rollout_with_fake_carla(monkeypatch)
+    dedup_state = rollout._CollisionDedupState(cooldown_frames=20)
+    actor = _Actor(actor_id=7, type_id="static.car")
+    collision_events = []
+    processed_count = 0
+    counts = []
+
+    for frame in (0, 10, 31):
+        collision_events.append(_CollisionEvent(frame=frame, actor=actor))
+        event_state, processed_count = rollout._collision_event(
+            collision_events,
+            processed_count,
+            dedup_state=dedup_state,
+            current_frame=frame,
+        )
+        counts.append(event_state.collision_event_count)
+
+    assert processed_count == 3
+    assert counts == [1, 0, 1]
+
+
+def test_collision_contact_episode_dedup_falls_back_to_actor_type_without_id(monkeypatch):
+    rollout, _basic_agent = _load_rollout_with_fake_carla(monkeypatch)
+    dedup_state = rollout._CollisionDedupState(cooldown_frames=20)
+    collision_events = [
+        _CollisionEvent(frame=0, actor=_Actor(actor_id=None, type_id="static.prop")),
+        _CollisionEvent(frame=1, actor=_Actor(actor_id=None, type_id="static.prop")),
+    ]
+
+    event_state, processed_count = rollout._collision_event(
+        collision_events,
+        processed_count=0,
+        dedup_state=dedup_state,
+        current_frame=1,
+    )
+
+    assert processed_count == 2
+    assert event_state.collision is True
+    assert event_state.collision_new is True
+    assert event_state.collision_event_count == 1
+    assert event_state.collision_actor_type == "static.prop"

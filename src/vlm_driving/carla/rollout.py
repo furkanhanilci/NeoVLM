@@ -7,7 +7,7 @@ import queue
 import random
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import carla
@@ -69,6 +69,7 @@ class RolloutConfig:
     blocked_steps_threshold: int = 80
     route_progress_lookahead_segments: int = 25
     route_progress_max_step_m: float = 25.0
+    collision_cooldown_frames: int = 20
 
 
 def _speed_mps(vehicle: carla.Vehicle) -> float:
@@ -292,20 +293,84 @@ def _route_state(config: RolloutConfig, tracker: RouteProgressTracker, ego: EgoS
     )
 
 
-def _collision_event(collision_events: list[carla.CollisionEvent], processed_count: int) -> tuple[EventState, int]:
+@dataclass
+class _CollisionDedupState:
+    cooldown_frames: int
+    last_seen_frame_by_actor: dict[tuple[str, object], int] = field(default_factory=dict)
+
+    def is_new_contact_episode(self, event: carla.CollisionEvent, current_frame: int) -> bool:
+        actor_key = _collision_actor_key(event)
+        frame = _collision_frame(event, current_frame)
+        last_seen_frame = self.last_seen_frame_by_actor.get(actor_key)
+        self.last_seen_frame_by_actor[actor_key] = frame
+        if last_seen_frame is None:
+            return True
+        if self.cooldown_frames <= 0:
+            return True
+        return frame - last_seen_frame > self.cooldown_frames
+
+
+def _collision_event(
+    collision_events: list[carla.CollisionEvent],
+    processed_count: int,
+    dedup_state: _CollisionDedupState,
+    current_frame: int,
+) -> tuple[EventState, int]:
     new_events = collision_events[processed_count:]
     if not new_events:
         return EventState(), len(collision_events)
-    event = new_events[-1]
-    impulse = event.normal_impulse
-    magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
+    contact_episode_events = []
+    for event in new_events:
+        if dedup_state.is_new_contact_episode(event, current_frame):
+            contact_episode_events.append(event)
+    event = contact_episode_events[-1] if contact_episode_events else new_events[-1]
     return EventState(
         collision=True,
-        collision_new=True,
-        collision_event_count=len(new_events),
-        collision_actor_type=event.other_actor.type_id if event.other_actor else None,
-        collision_impulse=magnitude,
+        collision_new=bool(contact_episode_events),
+        collision_event_count=len(contact_episode_events),
+        collision_actor_type=_collision_actor_type(event),
+        collision_impulse=_collision_impulse_magnitude(event),
     ), len(collision_events)
+
+
+def _collision_actor_key(event: carla.CollisionEvent) -> tuple[str, object]:
+    other_actor = getattr(event, "other_actor", None)
+    if other_actor is None:
+        return ("unknown", "unknown")
+    actor_id = getattr(other_actor, "id", None)
+    if actor_id is not None:
+        return ("id", actor_id)
+    actor_type = getattr(other_actor, "type_id", None)
+    if actor_type is not None:
+        return ("type", actor_type)
+    return ("unknown", "unknown")
+
+
+def _collision_frame(event: carla.CollisionEvent, current_frame: int) -> int:
+    frame = getattr(event, "frame", current_frame)
+    try:
+        return int(frame)
+    except (TypeError, ValueError):
+        return int(current_frame)
+
+
+def _collision_actor_type(event: carla.CollisionEvent) -> str | None:
+    other_actor = getattr(event, "other_actor", None)
+    if other_actor is None:
+        return None
+    actor_type = getattr(other_actor, "type_id", None)
+    return str(actor_type) if actor_type is not None else None
+
+
+def _collision_impulse_magnitude(event: carla.CollisionEvent) -> float | None:
+    impulse = getattr(event, "normal_impulse", None)
+    if impulse is None:
+        return None
+    return math.sqrt(
+        float(getattr(impulse, "x", 0.0)) ** 2
+        + float(getattr(impulse, "y", 0.0)) ** 2
+        + float(getattr(impulse, "z", 0.0)) ** 2
+    )
 
 
 def _termination_state(
@@ -363,6 +428,7 @@ def run_rollout(config: RolloutConfig) -> Path:
     image_queue: queue.Queue[carla.Image] = queue.Queue(maxsize=8)
     collision_events: list[carla.CollisionEvent] = []
     processed_collision_count = 0
+    collision_dedup_state = _CollisionDedupState(cooldown_frames=config.collision_cooldown_frames)
     saved_frames = 0
     completed_steps = 0
     written_records: list[dict] = []
@@ -529,7 +595,12 @@ def run_rollout(config: RolloutConfig) -> Path:
                 else:
                     expert_control = None
 
-                events, processed_collision_count = _collision_event(collision_events, processed_collision_count)
+                events, processed_collision_count = _collision_event(
+                    collision_events,
+                    processed_collision_count,
+                    dedup_state=collision_dedup_state,
+                    current_frame=frame_id,
+                )
                 if ego_state.speed_mps <= config.blocked_speed_threshold_mps:
                     blocked_steps += 1
                 else:

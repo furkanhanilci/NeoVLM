@@ -98,7 +98,7 @@ T-021 adds Leaderboard-style rollout logging without changing the data-collectio
 - Eval mode sets `terminate_on_collision=False`. Collisions are accumulated as discrete events and termination becomes `goal_reached`, `max_steps`, or `blocked`.
 - `route_seed` deterministically selects the spawn/destination route pair when set; when omitted it defaults to `seed` for manifest traceability.
 - `route_progress_m`, `route_length_m`, and `distance_to_goal_m` are logged from a GlobalRoutePlanner spawn-to-destination route with a forward-only `RouteProgressTracker`; progress starts near zero at spawn and never decreases across rollout steps.
-- `collision_event_count` and `collision_new` mark only new collision events on each step; latched collision state is not counted repeatedly.
+- `collision_event_count` and `collision_new` mark only new collision contact episodes on each step. Repeated sensor events from continuous contact with the same actor are suppressed until the contact has been absent for `collision_cooldown_frames` frames, which defaults to about one second at the current 20 FPS rollout rate.
 - `policy.latency_ms` is logged around `policy.act` for `bc_policy` and `bc_remote`.
 - Eval-mode `control_mode="autopilot"` disables Traffic Manager autopilot and uses CARLA `BasicAgent` directly with `set_destination(destination.location)` and `run_step()` before each synchronous tick. This avoids the CARLA 0.9.15 `TrafficManager.set_path` no-op path and the earlier hand-written waypoint follower stall.
 - Dataset collection keeps the old Traffic Manager behavior because `terminate_on_collision=True` remains the default: autopilot is enabled, `BasicAgent` is not constructed, and no route-following override is applied.
