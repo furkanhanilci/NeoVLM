@@ -100,7 +100,8 @@ T-021 adds Leaderboard-style rollout logging without changing the data-collectio
 - `route_progress_m`, `route_length_m`, and `distance_to_goal_m` are logged from a GlobalRoutePlanner spawn-to-destination route with a forward-only `RouteProgressTracker`; progress starts near zero at spawn and never decreases across rollout steps.
 - `collision_event_count` and `collision_new` mark only new collision events on each step; latched collision state is not counted repeatedly.
 - `policy.latency_ms` is logged around `policy.act` for `bc_policy` and `bc_remote`.
-- Eval-mode `control_mode="autopilot"` asks the Traffic Manager to follow the planned route via `set_path`; if that API is unavailable or rejected, the rollout falls back to a simple sequential waypoint follower. Dataset collection keeps the old Traffic Manager behavior because `terminate_on_collision=True` remains the default.
+- Eval-mode `control_mode="autopilot"` disables Traffic Manager autopilot and uses the internal sequential waypoint follower directly. CARLA 0.9.15 `TrafficManager.set_path` can silently no-op, so it is not the default route-following path. Dataset collection keeps the old Traffic Manager behavior because `terminate_on_collision=True` remains the default.
+- The waypoint follower is a simple geometric controller for validation. A future `BasicAgent`/`BehaviorAgent` route follower can replace it when traffic-light and lane behavior need higher fidelity.
 - BC policies are not goal-conditioned in this task; their Route Completion remains an evaluation of how well the local driving policy happens to stay on the planned route.
 
 Dry checks before a live eval run:

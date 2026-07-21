@@ -288,17 +288,6 @@ def _configure_autopilot(
     config: RolloutConfig,
 ) -> _SequentialRouteFollower | None:
     eval_mode = not config.terminate_on_collision
-    if eval_mode and hasattr(traffic_manager, "set_path") and len(route_points) > 1:
-        vehicle.set_autopilot(True, traffic_manager.get_port())
-        traffic_manager.vehicle_percentage_speed_difference(vehicle, 35.0)
-        try:
-            if hasattr(traffic_manager, "auto_lane_change"):
-                traffic_manager.auto_lane_change(vehicle, False)
-            traffic_manager.set_path(vehicle, route_points[1:])
-            return None
-        except RuntimeError:
-            vehicle.set_autopilot(False, traffic_manager.get_port())
-
     if eval_mode:
         vehicle.set_autopilot(False, traffic_manager.get_port())
         return _SequentialRouteFollower(
