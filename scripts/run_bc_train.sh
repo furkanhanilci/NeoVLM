@@ -10,6 +10,7 @@ CHECKPOINT_PATH="${BC_CHECKPOINT:-results/bc_train/bc_checkpoint.pt}"
 EPOCHS="${BC_TRAIN_EPOCHS:-40}"
 BATCH_SIZE="${BC_TRAIN_BATCH_SIZE:-8}"
 LEARNING_RATE="${BC_TRAIN_LR:-0.001}"
+FEATURE_CACHE_MAX_CACHED_TENSORS="${FEATURE_CACHE_MAX_CACHED_TENSORS:-128}"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 "$MICROMAMBA" run -n vlm python - <<PY
@@ -45,8 +46,19 @@ if not split.train:
     raise RuntimeError("split has no train episodes")
 if not split.val:
     raise RuntimeError("split has no val episodes")
-train_dataset = ILDataset(split.train, feature_cache_dir=feature_cache_root, config=config)
-val_dataset = ILDataset(split.val, feature_cache_dir=feature_cache_root, config=config)
+feature_cache_max_cached_tensors = int("$FEATURE_CACHE_MAX_CACHED_TENSORS")
+train_dataset = ILDataset(
+    split.train,
+    feature_cache_dir=feature_cache_root,
+    config=config,
+    feature_cache_max_cached_tensors=feature_cache_max_cached_tensors,
+)
+val_dataset = ILDataset(
+    split.val,
+    feature_cache_dir=feature_cache_root,
+    config=config,
+    feature_cache_max_cached_tensors=feature_cache_max_cached_tensors,
+)
 if len(train_dataset) == 0 or len(val_dataset) == 0:
     raise RuntimeError(f"empty train/val dataset: train={len(train_dataset)} val={len(val_dataset)}")
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -65,6 +77,7 @@ print(
     "bc train ok: "
     f"train_samples={len(train_dataset)} val_samples={len(val_dataset)} "
     f"device={device} steps={result.steps} epochs={config.train.epochs} "
+    f"feature_cache_max_cached_tensors={feature_cache_max_cached_tensors} "
     f"initial_train_loss={result.initial_loss:.6f} final_train_loss={result.final_loss:.6f} "
     f"first_val_loss={result.validation_loss_history[0]:.6f} "
     f"final_val_loss={final_val_loss:.6f} checkpoint={checkpoint_path}"

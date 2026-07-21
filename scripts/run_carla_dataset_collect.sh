@@ -12,8 +12,29 @@ SAVE_EVERY_N_FRAMES="${CARLA_SAVE_EVERY_N_FRAMES:-5}"
 BASE_SEED="${CARLA_BASE_SEED:-1000}"
 VAL_RATIO="${CARLA_VAL_RATIO:-0.15}"
 SPLIT_SEED="${CARLA_SPLIT_SEED:-17}"
+ROUTE_COMMANDS="${CARLA_ROUTE_COMMANDS:-lane_follow,turn_left,turn_right,go_straight}"
+WEATHER_PRESETS="${CARLA_WEATHER_PRESETS:-ClearNoon,CloudyNoon,WetNoon}"
+TOWNS="${CARLA_TOWNS:-}"
+CACHE_MIB_PER_FRAME="${FEATURE_CACHE_MIB_PER_FRAME:-1.457}"
+MAX_SAVED_FRAMES="${CARLA_MAX_SAVED_FRAMES:-5000}"
 mkdir -p "$LOG_DIR"
 export PYTHONPATH="$ROOT/src:$ROOT/third_party/CARLA_0.9.15/PythonAPI/carla${PYTHONPATH:+:$PYTHONPATH}"
+
+if (( NUM_EPISODES <= 0 || FRAMES_PER_EPISODE <= 0 || SAVE_EVERY_N_FRAMES <= 0 )); then
+  echo "CARLA_NUM_EPISODES, CARLA_FRAMES_PER_EPISODE, and CARLA_SAVE_EVERY_N_FRAMES must be positive" >&2
+  exit 2
+fi
+
+SAVED_PER_EPISODE=$(((FRAMES_PER_EPISODE + SAVE_EVERY_N_FRAMES - 1) / SAVE_EVERY_N_FRAMES))
+TOTAL_SAVED_EST=$((SAVED_PER_EPISODE * NUM_EPISODES))
+if (( TOTAL_SAVED_EST > MAX_SAVED_FRAMES )); then
+  echo "estimated saved frames $TOTAL_SAVED_EST exceeds CARLA_MAX_SAVED_FRAMES=$MAX_SAVED_FRAMES" >&2
+  echo "reduce CARLA_NUM_EPISODES/FRAMES_PER_EPISODE or raise CARLA_MAX_SAVED_FRAMES intentionally" >&2
+  exit 2
+fi
+CACHE_EST_GIB="$(awk -v frames="$TOTAL_SAVED_EST" -v mib="$CACHE_MIB_PER_FRAME" 'BEGIN { printf "%.2f", frames * mib / 1024.0 }')"
+echo "carla dataset collect target: episodes=$NUM_EPISODES frames_per_episode=$FRAMES_PER_EPISODE save_every=$SAVE_EVERY_N_FRAMES saved_frames_est=$TOTAL_SAVED_EST cache_est_gib=$CACHE_EST_GIB max_saved_frames=$MAX_SAVED_FRAMES"
+echo "coverage cycle: routes=$ROUTE_COMMANDS weather=$WEATHER_PRESETS towns=${TOWNS:-current_world}"
 
 CARLA_DATASET_ROOT="$DATASET_ROOT" \
 CARLA_DATASET_NAME="$DATASET_NAME" \
@@ -21,6 +42,9 @@ CARLA_NUM_EPISODES="$NUM_EPISODES" \
 CARLA_FRAMES_PER_EPISODE="$FRAMES_PER_EPISODE" \
 CARLA_SAVE_EVERY_N_FRAMES="$SAVE_EVERY_N_FRAMES" \
 CARLA_BASE_SEED="$BASE_SEED" \
+CARLA_ROUTE_COMMANDS="$ROUTE_COMMANDS" \
+CARLA_WEATHER_PRESETS="$WEATHER_PRESETS" \
+CARLA_TOWNS="$TOWNS" \
 "$MICROMAMBA" run -n carla python - <<'PY' 2>&1 | tee "$LOG_DIR/carla_dataset_collect.log"
 from __future__ import annotations
 
@@ -104,6 +128,7 @@ CARLA_VAL_RATIO="$VAL_RATIO" \
 CARLA_SPLIT_SEED="$SPLIT_SEED" \
 CARLA_SAVE_EVERY_N_FRAMES="$SAVE_EVERY_N_FRAMES" \
 CARLA_FRAMES_PER_EPISODE="$FRAMES_PER_EPISODE" \
+FEATURE_CACHE_MIB_PER_FRAME="$CACHE_MIB_PER_FRAME" \
 "$MICROMAMBA" run -n vlm python - <<'PY' 2>&1 | tee "$LOG_DIR/carla_dataset_split.log"
 from __future__ import annotations
 
@@ -117,6 +142,7 @@ val_ratio = float(os.environ["CARLA_VAL_RATIO"])
 split_seed = int(os.environ["CARLA_SPLIT_SEED"])
 frames_per_episode = int(os.environ["CARLA_FRAMES_PER_EPISODE"])
 save_every_n_frames = int(os.environ["CARLA_SAVE_EVERY_N_FRAMES"])
+cache_mib_per_frame = float(os.environ["FEATURE_CACHE_MIB_PER_FRAME"])
 episodes = discover_episodes(dataset_root)
 split = split_episodes(episodes, val_ratio=val_ratio, seed=split_seed)
 manifest_path = write_split_manifest(
@@ -128,7 +154,7 @@ manifest_path = write_split_manifest(
 )
 saved_per_episode = (frames_per_episode + save_every_n_frames - 1) // save_every_n_frames
 total_saved = saved_per_episode * len(episodes)
-est_cache_gib = total_saved * 1.457 / 1024.0
+est_cache_gib = total_saved * cache_mib_per_frame / 1024.0
 print(
     "dataset split ok: "
     f"episodes={len(episodes)} train={len(split.train)} val={len(split.val)} "

@@ -43,7 +43,8 @@ Use `make carla-window` instead of `make carla-start` when a visible CARLA windo
 | `make carla-status` | `scripts/carla_status.sh` | host shell + CARLA client check | Checks whether CARLA is active/reachable. |
 | `make carla-rollout-smoke` | `scripts/run_carla_rollout_smoke.sh` | `micromamba run -n carla` | Runs an 80-step rule-based rollout into `results/smoke_rollout/`. |
 | `make carla-dataset-smoke` | `scripts/run_carla_dataset_smoke.sh` | `micromamba run -n carla` | Runs the IL dataset smoke path. |
-| `make carla-dataset-collect` | `scripts/run_carla_dataset_collect.sh` | `carla` collection + `vlm` split manifest | Collects multiple autopilot episodes and writes `split_manifest.json`; actual CARLA run is T-017. |
+| `make carla-dataset-collect` | `scripts/run_carla_dataset_collect.sh` | `carla` collection + `vlm` split manifest | Collects multiple autopilot episodes and writes `split_manifest.json`; T-019 live scale run uses this path. |
+| `make dataset-stats` | `scripts/run_dataset_stats.sh` | `micromamba run -n vlm` | Summarizes dataset QA before spending GPU time on feature cache. |
 | `make bc-smoke` | `scripts/run_bc_smoke.sh` | `micromamba run -n vlm` | Trains the tiny BC policy on the cached feature smoke set and writes `results/bc_smoke/bc_checkpoint.pt`. |
 | `make feature-cache-dataset` | `scripts/build_feature_cache_dataset.sh` | `micromamba run -n vlm` + CUDA | Builds per-episode frozen-Qwen caches for `results/datasets/carla_il_collect/`. |
 | `make bc-train` | `scripts/run_bc_train.sh` | `micromamba run -n vlm` | Trains BC on the train split and reports validation loss. |
@@ -89,18 +90,30 @@ Outputs are written to `results/bc_bridge_smoke/`, with policy-server logs in `s
 
 ## Dataset Collection
 
-T-016 prepares the multi-episode collection path; T-017 is the actual CARLA run. Start from a modest first real dataset rather than the 100k-frame research target:
+T-018 keeps the next scale step CARLA-ready without starting a live run. Start from a modest first scale dataset rather than the 100k-frame research target:
 
 - Initial target: `CARLA_NUM_EPISODES=50`, `CARLA_FRAMES_PER_EPISODE=200`, `CARLA_SAVE_EVERY_N_FRAMES=5`. This yields about 2,000 saved RGB frames.
 - Feature-cache budget: T-011 measured about 1.457 MiB per saved frame, so 2,000 frames is about 2.85 GiB. Keep the first pass under 5,000 saved frames, about 7.1 GiB cache.
 - Split policy: split by episode, not by frame, with the default 85/15 train/val split and `CARLA_SPLIT_SEED=17`.
 - Diversity knobs: `CARLA_BASE_SEED` changes spawn/traffic-manager seed; `CARLA_ROUTE_COMMANDS` and `CARLA_WEATHER_PRESETS` cycle per episode. `CARLA_TOWNS` can be set to comma-separated CARLA map names when changing town is needed.
 
+Scale/disk budget:
+
+| Run | Episodes | Frames/episode | Save every | Saved frames | Cache estimate |
+|-----|----------|----------------|------------|--------------|----------------|
+| T-017 proof dataset | 6 | 150 | 5 | 180 | 0.26 GiB |
+| T-019 first scale target | 50 | 200 | 5 | 2,000 | 2.85 GiB |
+| Local first-pass ceiling | 125 | 200 | 5 | 5,000 | 7.11 GiB |
+| Avoid for local iteration | n/a | n/a | n/a | 100,000 | 142.3 GiB |
+
+`scripts/run_carla_dataset_collect.sh` refuses targets above `CARLA_MAX_SAVED_FRAMES=5000` unless that budget is raised explicitly.
+
 Dry validation before a CARLA run:
 
 ```bash
 bash -n scripts/run_carla_dataset_collect.sh
 micromamba run -n vlm python -c "from vlm_driving.data import discover_episodes, split_episodes; print('ok')"
+micromamba run -n carla python -c "from vlm_driving.carla import RolloutConfig; from vlm_driving.data.splits import discover_episodes; print('carla dry import ok')"
 ```
 
 Actual collection, with CARLA already running:
@@ -113,7 +126,15 @@ CARLA_NUM_EPISODES=50 CARLA_FRAMES_PER_EPISODE=200 CARLA_SAVE_EVERY_N_FRAMES=5 m
 
 The script writes episodes under `results/datasets/carla_il_collect/episode_XXXX/` and an episode-level `split_manifest.json` at the dataset root.
 
-After collection, keep CARLA closed so the VLM has GPU memory, then build per-episode caches and train BC on the split:
+Before spending GPU time on frozen-Qwen cache, run dataset QA:
+
+```bash
+make dataset-stats
+```
+
+The T-017 proof dataset should report saved action nonzero around `64.4%` and `double_pedal=0`; large deviations in a new run are a signal to inspect collection quality before caching.
+
+After QA passes, keep CARLA closed so the VLM has GPU memory, then build per-episode caches and train BC on the split:
 
 ```bash
 make carla-status   # should show no CARLA process before GPU cache build

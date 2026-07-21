@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import torch
@@ -52,6 +53,78 @@ def test_cached_feature_reader_roundtrip_with_synthetic_cpu_files(tmp_path: Path
         CachedFeatureReader(tmp_path, expected_model_id="other/model")
     with pytest.raises(ValueError, match="hidden_size mismatch"):
         CachedFeatureReader(tmp_path, expected_hidden_size=9)
+
+
+def _write_synthetic_cache(cache_dir: Path, values: list[float]) -> None:
+    records = []
+    for index, value in enumerate(values):
+        tensor = torch.full((2, 3), value, dtype=torch.float32)
+        cache_file = f"frame_{index:05d}.pt"
+        torch.save(tensor, cache_dir / cache_file)
+        records.append(
+            FeatureCacheRecord(
+                frame_key=f"frame_{index:05d}.png",
+                source_frame=f"frames/frame_{index:05d}.png",
+                cache_file=cache_file,
+                shape=[2, 3],
+                dtype=str(tensor.dtype),
+            )
+        )
+    FeatureCacheManifest(
+        schema_version="vlm_hidden_cache_v1",
+        model_id="synthetic/model",
+        hidden_size=3,
+        precision="fp32",
+        command_text="keep lane",
+        num_frames=len(records),
+        records=records,
+    ).write(cache_dir / "cache_manifest.json")
+
+
+def test_cached_feature_reader_lru_hits_and_evicts_least_recently_used(tmp_path: Path):
+    _write_synthetic_cache(tmp_path, [0.0, 1.0, 2.0])
+    reader = CachedFeatureReader(tmp_path, max_cached_tensors=2)
+
+    with mock.patch("torch.load", wraps=torch.load) as wrapped_load:
+        frame0 = reader.read("frame_00000.png")
+        frame1 = reader.read("frame_00001.png")
+        frame0_again = reader.read("frame_00000.png")
+        frame2 = reader.read("frame_00002.png")
+
+    assert frame0_again is frame0
+    assert torch.all(frame1 == 1.0)
+    assert torch.all(frame2 == 2.0)
+    assert wrapped_load.call_count == 3
+    assert reader.cache_info() == {
+        "max_cached_tensors": 2,
+        "size": 2,
+        "hits": 1,
+        "misses": 3,
+        "evictions": 1,
+        "keys": [
+            {"frame_key": "frame_00000.png", "map_location": "cpu"},
+            {"frame_key": "frame_00002.png", "map_location": "cpu"},
+        ],
+    }
+
+
+def test_cached_feature_reader_capacity_zero_preserves_reload_behavior(tmp_path: Path):
+    _write_synthetic_cache(tmp_path, [4.0])
+    reader = CachedFeatureReader(tmp_path, max_cached_tensors=0)
+
+    first = reader.read("frame_00000.png")
+    second = reader.read("frame_00000.png")
+
+    assert torch.equal(first, second)
+    assert first is not second
+    assert reader.cache_info() == {
+        "max_cached_tensors": 0,
+        "size": 0,
+        "hits": 0,
+        "misses": 2,
+        "evictions": 0,
+        "keys": [],
+    }
 
 
 @pytest.mark.vlm

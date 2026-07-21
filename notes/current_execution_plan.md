@@ -108,8 +108,15 @@ the dependency order below, not appended as afterthoughts.
   and a label source: CoVLA acquisition and/or VLM auto-labeling of CARLA rollouts.
 - Prerequisite for supervising the structured rationale head and for the
   "CoVLA only vs CARLA only vs mixed" comparison.
-- Gated by the Scope Guard: do not start large dataset/model downloads until
-  M4 (smaller VLM) is chosen and offline-feature-caching design is decided.
+- Current scale decision (2026-07-21): after T-017's train/val gap, M-data scale
+  is the next large direction. T-018 is CARLA-less preparation; T-019 is the live
+  run. First target is `50 x 200 / save_every=5` (~2,000 saved frames, ~2.85 GiB
+  feature cache), with a local first-pass ceiling of 5,000 saved frames (~7.1 GiB).
+- Run `make dataset-stats` before feature-cache generation; QA reports action
+  nonzero rate, double-pedal count, route/weather/town coverage, and train/val
+  balance. It is a report gate, not an automatic reject gate.
+- G3 rationale label source remains open; do not mix rationale-label scope into
+  T-018/T-019 expert data scale unless that design is explicitly decided.
 
 ### M-rep - Representation Variants (gap G4)
 - Implement the alternative representation paths for the ablation axis
@@ -131,10 +138,10 @@ the dependency order below, not appended as afterthoughts.
 
 ### Revised High-Level Order
 M1-M3 (done) -> M4 (done: T-008..T-011, 2B provider + offline cache) ->
-**M5 (IL loop first)** -> M-mem (temporal memory as an ablation on the working
-IL baseline) -> M-data (scale expert data + rationale labels) -> M6 (residual
-PPO) -> M-rep -> M-eval/M7 -> M-exp (spans M5 onward). Staleness augmentation
-(gap G8) lands with M5/M6 training.
+**M5 (IL loop first, done)** -> **M-data scale (T-018/T-019, current)** ->
+M-mem (temporal memory as an ablation on the working IL baseline) -> M6
+(residual PPO) -> M-rep -> M-eval/M7 -> M-exp (spans M5 onward). Staleness
+augmentation (gap G8) lands with M-mem/M6 training.
 
 Reorder note (2026-07-20): M5 moved before M-mem. A memory module cannot be
 validated without a training loop, so build the feedforward IL baseline first,

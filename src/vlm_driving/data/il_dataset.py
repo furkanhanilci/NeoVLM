@@ -69,6 +69,7 @@ class ILDataset(Dataset):
         episode_dirs: Sequence[str | Path] | str | Path,
         config: ExperimentConfig | None = None,
         feature_cache_dir: str | Path | None = None,
+        feature_cache_max_cached_tensors: int = 128,
         metadata_filename: str = "metadata.jsonl",
     ) -> None:
         self.config = config or ExperimentConfig()
@@ -86,6 +87,7 @@ class ILDataset(Dataset):
             feature_cache_dir=feature_cache_dir,
             expected_model_id=self.config.vlm.model_id,
             expected_hidden_size=self.config.vlm.hidden_size,
+            max_cached_tensors=feature_cache_max_cached_tensors,
         )
         self.reader: CachedFeatureReader | None = None
         if len(set(self.readers_by_episode_dir.values())) == 1 and self.readers_by_episode_dir:
@@ -189,6 +191,7 @@ def _cache_readers_by_episode(
     feature_cache_dir: str | Path | None,
     expected_model_id: str,
     expected_hidden_size: int,
+    max_cached_tensors: int,
 ) -> dict[Path, CachedFeatureReader]:
     if feature_cache_dir is None:
         return {}
@@ -199,6 +202,7 @@ def _cache_readers_by_episode(
             cache_root,
             expected_model_id=expected_model_id,
             expected_hidden_size=expected_hidden_size,
+            max_cached_tensors=max_cached_tensors,
         )
         return {episode_dir: shared_reader for episode_dir in episode_dirs}
 
@@ -213,6 +217,7 @@ def _cache_readers_by_episode(
             episode_cache_dir,
             expected_model_id=expected_model_id,
             expected_hidden_size=expected_hidden_size,
+            max_cached_tensors=max_cached_tensors,
         )
     if missing:
         raise FileNotFoundError(
